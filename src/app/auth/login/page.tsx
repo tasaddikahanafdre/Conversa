@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bot, ArrowRight, Loader2, AlertCircle } from "lucide-react";
+import { Bot, ArrowRight, Loader2, AlertCircle, RefreshCw, CheckCircle2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
@@ -13,38 +13,71 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Email confirmation helper state
+  const [isEmailNotConfirmed, setIsEmailNotConfirmed] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setIsEmailNotConfirmed(false);
 
     try {
       const supabase = createClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (signInError) {
-        // Fallback for development if Supabase credentials are placeholder
         if (
-          signInError.message.includes("Invalid API key") ||
-          signInError.message.includes("Failed to fetch")
+          signInError.message.toLowerCase().includes("email not confirmed") ||
+          signInError.message.toLowerCase().includes("not confirmed")
         ) {
-          // Dev bypass for testing UI without active Supabase server
-          console.warn("Dev mode: Proceeding to dashboard");
-          router.push("/dashboard");
-          return;
+          setIsEmailNotConfirmed(true);
         }
         throw signInError;
       }
 
-      router.push("/dashboard");
+      // Check if user already has an active workspace
+      const { data: memberWorkspaces } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .limit(1);
+
+      if (memberWorkspaces && memberWorkspaces.length > 0) {
+        router.push("/dashboard");
+      } else {
+        router.push("/onboarding");
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to sign in";
       setError(message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendConfirmation = async () => {
+    if (!email) return;
+    setResending(true);
+    try {
+      const supabase = createClient();
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: {
+          emailRedirectTo: `${origin}/auth/callback?next=/onboarding`,
+        },
+      });
+      setResendSuccess(true);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setResending(false);
     }
   };
 
@@ -70,9 +103,33 @@ export default function LoginPage() {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-8 shadow-xl backdrop-blur-md">
           {error && (
-            <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
-              <AlertCircle className="h-5 w-5 shrink-0" />
-              <span>{error}</span>
+            <div className="mb-6 space-y-2 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+
+              {isEmailNotConfirmed && (
+                <div className="mt-3 pt-3 border-t border-red-500/20 text-xs text-slate-300">
+                  <p>Your Supabase project requires email confirmation before signing in.</p>
+                  {resendSuccess ? (
+                    <div className="mt-2 flex items-center gap-1.5 text-emerald-400">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Confirmation email resent! Check your inbox.
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={resending}
+                      onClick={handleResendConfirmation}
+                      className="mt-2 inline-flex items-center gap-1.5 font-semibold text-blue-400 hover:text-blue-300 underline"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${resending ? "animate-spin" : ""}`} />
+                      Click here to resend confirmation email
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -96,9 +153,9 @@ export default function LoginPage() {
                 <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
                   Password
                 </label>
-                <a href="#" className="text-xs text-blue-400 hover:text-blue-300">
+                <Link href="/auth/forgot-password" className="text-xs text-blue-400 hover:text-blue-300">
                   Forgot password?
-                </a>
+                </Link>
               </div>
               <input
                 type="password"

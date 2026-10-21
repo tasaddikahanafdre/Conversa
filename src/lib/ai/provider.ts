@@ -1,6 +1,18 @@
+/**
+ * CONVERSA AI PROVIDER ABSTRACTION
+ * Supports Google Gemini API (gemini-1.5-flash, gemini-1.5-pro)
+ * and OpenRouter-compatible OpenAI format providers.
+ */
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+}
+
+export interface AIProviderConfig {
+  provider: "gemini" | "openrouter";
+  apiKey?: string;
+  model?: string;
 }
 
 export interface AICompletionOptions {
@@ -12,6 +24,8 @@ export interface AICompletionOptions {
 
 export interface AICompletionResponse {
   text: string;
+  provider: string;
+  model: string;
   tokensUsed: {
     promptTokens: number;
     completionTokens: number;
@@ -21,103 +35,184 @@ export interface AICompletionResponse {
 }
 
 /**
- * Calculate conversation cost in BDT based on Gemini 1.5 Flash token rates:
- * - Input: ~$0.075 per 1M tokens (~0.009 BDT per 1k tokens)
- * - Output: ~$0.30 per 1M tokens (~0.036 BDT per 1k tokens)
+ * Calculates BDT cost based on Gemini 1.5 Flash rates:
+ * - Input: $0.075 / 1M tokens
+ * - Output: $0.30 / 1M tokens
+ * Conversion: 1 USD = 120 BDT
  */
 export function calculateGeminiBdtCost(promptTokens: number, completionTokens: number): number {
-  const usdRate = 120; // 1 USD = 120 BDT
+  const usdRate = 120;
   const inputCostUsd = (promptTokens / 1_000_000) * 0.075;
   const outputCostUsd = (completionTokens / 1_000_000) * 0.30;
   return (inputCostUsd + outputCostUsd) * usdRate;
 }
 
 /**
- * Universal AI Completion Engine
+ * Validates whether the AI provider is properly configured
+ */
+export function validateAiConfiguration(): { configured: boolean; provider: string; error?: string } {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+
+  if (geminiKey && geminiKey !== "your-gemini-api-key" && !geminiKey.startsWith("your-")) {
+    return { configured: true, provider: "gemini" };
+  }
+
+  if (openRouterKey && openRouterKey !== "your-openrouter-key") {
+    return { configured: true, provider: "openrouter" };
+  }
+
+  return {
+    configured: false,
+    provider: "none",
+    error: "No AI API key found. Please configure GEMINI_API_KEY in your .env.local file.",
+  };
+}
+
+/**
+ * Executes chat completion against Google Gemini REST API
+ */
+async function callGeminiApi(
+  apiKey: string,
+  messages: ChatMessage[],
+  options: AICompletionOptions
+): Promise<AICompletionResponse> {
+  const model = options.model || "gemini-1.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const contents = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
+
+  const body: Record<string, any> = {
+    contents,
+    generationConfig: {
+      temperature: options.temperature ?? 0.3,
+      maxOutputTokens: options.maxTokens ?? 300,
+    },
+  };
+
+  if (options.systemInstruction) {
+    body.systemInstruction = {
+      parts: [{ text: options.systemInstruction }],
+    };
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errorDetails = await res.text();
+    throw new Error(`Gemini API returned error (${res.status}): ${errorDetails}`);
+  }
+
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  const promptTokens = data.usageMetadata?.promptTokenCount || 50;
+  const completionTokens = data.usageMetadata?.candidatesTokenCount || 25;
+
+  return {
+    text,
+    provider: "google-gemini",
+    model,
+    tokensUsed: {
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+    },
+    costBdt: calculateGeminiBdtCost(promptTokens, completionTokens),
+  };
+}
+
+/**
+ * Executes chat completion against OpenRouter API
+ */
+async function callOpenRouterApi(
+  apiKey: string,
+  messages: ChatMessage[],
+  options: AICompletionOptions
+): Promise<AICompletionResponse> {
+  const model = options.model || "meta-llama/llama-3.1-8b-instruct";
+  const formattedMessages = [
+    ...(options.systemInstruction
+      ? [{ role: "system" as const, content: options.systemInstruction }]
+      : []),
+    ...messages,
+  ];
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+      "X-Title": "Conversa SaaS",
+    },
+    body: JSON.stringify({
+      model,
+      messages: formattedMessages,
+      temperature: options.temperature ?? 0.3,
+      max_tokens: options.maxTokens ?? 300,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenRouter API error (${res.status}): ${err}`);
+  }
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || "";
+  const usage = data.usage || {};
+
+  return {
+    text,
+    provider: "openrouter",
+    model,
+    tokensUsed: {
+      promptTokens: usage.prompt_tokens || 50,
+      completionTokens: usage.completion_tokens || 25,
+      totalTokens: usage.total_tokens || 75,
+    },
+    costBdt: calculateGeminiBdtCost(usage.prompt_tokens || 50, usage.completion_tokens || 25),
+  };
+}
+
+/**
+ * Universal Generate AI Reply Dispatcher
  */
 export async function generateAiReply(
   messages: ChatMessage[],
   options: AICompletionOptions = {}
 ): Promise<AICompletionResponse> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  const model = options.model || "gemini-1.5-flash";
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
 
-  // If no Gemini key is set in local environment, provide realistic structured fallback
-  if (!apiKey || apiKey === "your-gemini-api-key") {
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content || "";
-    const lower = lastUserMessage.toLowerCase();
-
-    let reply = "Assalamu Alaikum! Conversa Fashion e apnake shagotom. Apnar kisu janar thakle bolun.";
-
-    if (lower.includes("price") || lower.includes("koto") || lower.includes("dam")) {
-      reply = "Amader Premium Cotton T-Shirt er dam matro ৳ 750! Stock e size M, L, XL available ache.";
-    } else if (lower.includes("delivery")) {
-      reply = "Delivery charge Dhaka city te ৳ 70 ebong Dhaka baire ৳ 130. 2-3 diner moddhe delivery peye jaben.";
-    }
-
-    return {
-      text: reply,
-      tokensUsed: {
-        promptTokens: 120,
-        completionTokens: 45,
-        totalTokens: 165,
-      },
-      costBdt: 0.05,
-    };
+  if (geminiKey && geminiKey !== "your-gemini-api-key" && !geminiKey.startsWith("your-")) {
+    return await callGeminiApi(geminiKey, messages, options);
   }
 
-  // Official Google AI Gemini REST API call
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const contents = messages
-      .filter((m) => m.role !== "system")
-      .map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
-
-    const body: Record<string, any> = {
-      contents,
-      generationConfig: {
-        temperature: options.temperature ?? 0.3,
-        maxOutputTokens: options.maxTokens ?? 300,
-      },
-    };
-
-    if (options.systemInstruction) {
-      body.systemInstruction = {
-        parts: [{ text: options.systemInstruction }],
-      };
-    }
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini API Error: ${err}`);
-    }
-
-    const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const promptTokens = data.usageMetadata?.promptTokenCount || 100;
-    const completionTokens = data.usageMetadata?.candidatesTokenCount || 50;
-
-    return {
-      text,
-      tokensUsed: {
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
-      },
-      costBdt: calculateGeminiBdtCost(promptTokens, completionTokens),
-    };
-  } catch (error) {
-    console.error("[AI Engine Error]", error);
-    throw error;
+  if (openRouterKey && openRouterKey !== "your-openrouter-key") {
+    return await callOpenRouterApi(openRouterKey, messages, options);
   }
+
+  // If no external key is configured, return an explicit configuration status
+  // Note: As specified, we do not pretend external API connection succeeded.
+  return {
+    text: "Assalamu Alaikum! (Conversa Local Sandbox Mode: Please set your GEMINI_API_KEY in .env.local to generate live responses from Google Gemini)",
+    provider: "local-simulation",
+    model: "sandbox-rule-engine",
+    tokensUsed: {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    },
+    costBdt: 0.0,
+  };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -15,12 +15,13 @@ import {
   Share2,
   Wallet,
   Settings,
-  ChevronDown,
   Menu,
   X,
-  Power,
-  Zap,
+  LogOut,
+  User,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { signOutAction } from "@/app/auth/actions";
 
 export default function DashboardLayout({
   children,
@@ -30,17 +31,45 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isAiActiveGlobally, setIsAiActiveGlobally] = useState(true);
+  const [userEmail, setUserEmail] = useState<string>("admin@conversa.app");
+  const [workspaceName, setWorkspaceName] = useState<string>("My Business");
+
+  useEffect(() => {
+    async function fetchUser() {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user?.email) {
+        setUserEmail(user.email);
+      }
+
+      // Fetch active workspace
+      const { data: memberWorkspaces } = await supabase
+        .from("workspace_members")
+        .select("workspace:workspaces(name)")
+        .limit(1)
+        .single();
+
+      if (memberWorkspaces?.workspace) {
+        const ws = memberWorkspaces.workspace as any;
+        if (ws?.name) setWorkspaceName(ws.name);
+      }
+    }
+    fetchUser();
+  }, []);
 
   const navItems = [
     { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
-    { label: "AI Agent Studio", href: "/dashboard/agent", icon: Sparkles },
-    { label: "Knowledge & SOP", href: "/dashboard/knowledge", icon: BookOpen },
+    { label: "AI Agents", href: "/dashboard/agent", icon: Sparkles },
+    { label: "Knowledge Base", href: "/dashboard/knowledge", icon: BookOpen },
     { label: "Product Catalog", href: "/dashboard/products", icon: ShoppingBag },
     { label: "Live Test Arena", href: "/dashboard/test-arena", icon: Smartphone, highlight: true },
-    { label: "Live Inbox", href: "/dashboard/inbox", icon: MessageSquare },
+    { label: "Conversations", href: "/dashboard/inbox", icon: MessageSquare },
     { label: "Orders & Couriers", href: "/dashboard/orders", icon: Package },
     { label: "Channels", href: "/dashboard/channels", icon: Share2 },
-    { label: "Wallet & Billing", href: "/dashboard/billing", icon: Wallet },
+    { label: "Usage & Billing", href: "/dashboard/billing", icon: Wallet },
     { label: "Settings", href: "/dashboard/settings", icon: Settings },
   ];
 
@@ -48,28 +77,28 @@ export default function DashboardLayout({
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
       {/* Sidebar for Desktop */}
       <aside className="hidden w-64 flex-col border-r border-slate-800 bg-slate-950 p-4 md:flex">
-        {/* Brand & Workspace Dropdown */}
+        {/* Brand & Workspace */}
         <div className="mb-6 px-2">
           <Link href="/dashboard" className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-md shadow-blue-500/20">
               <Bot className="h-5 w-5 text-white" />
             </div>
-            <div>
-              <span className="text-lg font-bold tracking-tight text-white">
+            <div className="min-w-0">
+              <span className="text-lg font-bold tracking-tight text-white block truncate">
                 Conversa<span className="text-blue-500">.</span>
               </span>
-              <div className="text-[11px] text-slate-400 font-medium">Dhaka Retailers Ltd.</div>
+              <div className="text-[11px] text-slate-400 font-medium truncate">{workspaceName}</div>
             </div>
           </Link>
         </div>
 
         {/* Global AI Master Switch */}
-        <div className="mb-6 rounded-xl border border-slate-800/80 bg-slate-900/60 p-3">
+        <div className="mb-5 rounded-xl border border-slate-800/80 bg-slate-900/60 p-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className={`h-2.5 w-2.5 rounded-full ${isAiActiveGlobally ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`} />
               <span className="text-xs font-semibold text-slate-300">
-                AI Auto-Reply
+                AI Automation
               </span>
             </div>
             <button
@@ -87,7 +116,7 @@ export default function DashboardLayout({
             </button>
           </div>
           <div className="mt-2 text-[10.5px] text-slate-400">
-            {isAiActiveGlobally ? "Automating responses 24/7" : "Paused — human mode only"}
+            {isAiActiveGlobally ? "Active 24/7 on connected channels" : "Paused — human agent mode only"}
           </div>
         </div>
 
@@ -100,7 +129,7 @@ export default function DashboardLayout({
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-medium transition ${
+                className={`flex items-center justify-between rounded-xl px-3 py-2 text-xs font-medium transition ${
                   isActive
                     ? "bg-blue-600 text-white shadow-md shadow-blue-600/20"
                     : "text-slate-400 hover:bg-slate-900 hover:text-white"
@@ -120,18 +149,24 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        {/* BDT Balance Card */}
-        <div className="mt-auto rounded-xl border border-slate-800 bg-slate-900/50 p-3">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Wallet Balance</span>
-            <span className="font-bold text-emerald-400">৳ 850.00</span>
+        {/* User Profile & Sign Out Card */}
+        <div className="mt-auto border-t border-slate-800/80 pt-3">
+          <div className="flex items-center justify-between px-2 py-1.5">
+            <div className="min-w-0 pr-2">
+              <div className="text-xs font-semibold text-white truncate">{userEmail}</div>
+              <div className="text-[10px] text-slate-400">Owner</div>
+            </div>
+
+            <form action={signOutAction}>
+              <button
+                type="submit"
+                title="Sign Out"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-900 hover:text-red-400 transition"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            </form>
           </div>
-          <Link
-            href="/dashboard/billing"
-            className="mt-2 block w-full rounded-lg bg-slate-800 py-1.5 text-center text-[11px] font-semibold text-slate-200 transition hover:bg-slate-700"
-          >
-            Recharge (bKash/Nagad)
-          </Link>
         </div>
       </aside>
 
@@ -155,29 +190,41 @@ export default function DashboardLayout({
 
         {/* Mobile Drawer */}
         {mobileMenuOpen && (
-          <div className="fixed inset-0 z-50 bg-slate-950/95 p-6 md:hidden">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <span className="font-bold text-white">Conversa Menu</span>
-              <button onClick={() => setMobileMenuOpen(false)}>
-                <X className="h-6 w-6 text-slate-400" />
-              </button>
+          <div className="fixed inset-0 z-50 bg-slate-950/95 p-6 md:hidden flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <span className="font-bold text-white">Conversa Menu</span>
+                <button onClick={() => setMobileMenuOpen(false)}>
+                  <X className="h-6 w-6 text-slate-400" />
+                </button>
+              </div>
+              <nav className="mt-6 space-y-2">
+                {navItems.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-900 hover:text-white"
+                    >
+                      <Icon className="h-5 w-5 text-slate-400" />
+                      <span>{item.label}</span>
+                    </Link>
+                  );
+                })}
+              </nav>
             </div>
-            <nav className="mt-6 space-y-2">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="flex items-center gap-3 rounded-lg px-3 py-3 text-sm text-slate-300 hover:bg-slate-900 hover:text-white"
-                  >
-                    <Icon className="h-5 w-5 text-slate-400" />
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-            </nav>
+
+            <form action={signOutAction} className="pt-6 border-t border-slate-800">
+              <button
+                type="submit"
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-800 py-3 text-xs font-semibold text-red-400 hover:bg-slate-700"
+              >
+                <LogOut className="h-4 w-4" />
+                Sign Out
+              </button>
+            </form>
           </div>
         )}
 

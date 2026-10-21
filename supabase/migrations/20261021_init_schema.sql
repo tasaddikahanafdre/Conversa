@@ -234,6 +234,11 @@ create policy "Users can view workspaces they belong to"
   on public.workspaces for select
   using (id in (select public.user_workspace_ids()));
 
+create policy "Authenticated users can create workspaces"
+  on public.workspaces for insert
+  to authenticated
+  with check (true);
+
 create policy "Users can update workspaces they own or admin"
   on public.workspaces for update
   using (
@@ -249,6 +254,11 @@ create policy "Users can update workspaces they own or admin"
 create policy "Users can view members in their workspaces"
   on public.workspace_members for select
   using (workspace_id in (select public.user_workspace_ids()));
+
+create policy "Users can insert themselves into workspace"
+  on public.workspace_members for insert
+  to authenticated
+  with check (user_id = auth.uid());
 
 -- 3. AI Agents Policy
 create policy "Workspace members can view AI agents"
@@ -310,7 +320,7 @@ create policy "Workspace members can view conversations"
   on public.conversations for select
   using (public.is_workspace_member(workspace_id));
 
-create policy "Workspace members can update conversations (e.g. handoff)"
+create policy "Workspace members can update conversations"
   on public.conversations for update
   using (public.is_workspace_member(workspace_id));
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   MessageSquare,
@@ -12,19 +13,70 @@ import {
   Share2,
   Sparkles,
   Smartphone,
+  BookOpen,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
 export default function DashboardOverviewPage() {
+  const [workspace, setWorkspace] = useState<any>(null);
+  const [channelsCount, setChannelsCount] = useState<number>(0);
+  const [knowledgeCount, setKnowledgeCount] = useState<number>(0);
+  const [conversationsCount, setConversationsCount] = useState<number>(0);
+  const [ordersCount, setOrdersCount] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    async function loadStats() {
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user) {
+          const { data: member } = await supabase
+            .from("workspace_members")
+            .select("workspace:workspaces(*)")
+            .limit(1)
+            .single();
+
+          if (member?.workspace) {
+            const ws = member.workspace as any;
+            setWorkspace(ws);
+
+            // Fetch real counts
+            const [channels, knowledge, conversations, orders] = await Promise.all([
+              supabase.from("connected_channels").select("id", { count: "exact", head: true }).eq("workspace_id", ws.id),
+              supabase.from("agent_knowledge").select("id", { count: "exact", head: true }),
+              supabase.from("conversations").select("id", { count: "exact", head: true }).eq("workspace_id", ws.id),
+              supabase.from("captured_orders").select("id", { count: "exact", head: true }).eq("workspace_id", ws.id),
+            ]);
+
+            setChannelsCount(channels.count || 0);
+            setKnowledgeCount(knowledge.count || 0);
+            setConversationsCount(conversations.count || 0);
+            setOrdersCount(orders.count || 0);
+          }
+        }
+      } catch (err) {
+        console.warn("Could not load stats", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadStats();
+  }, []);
+
   return (
     <div className="space-y-8">
       {/* Top Banner / Welcome */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">
-            Workspace Overview
+            {workspace?.name ? `${workspace.name} Overview` : "Workspace Overview"}
           </h1>
           <p className="text-sm text-slate-400">
-            Real-time automation activity for your connected business channels
+            Real-time status of your AI customer support automation
           </p>
         </div>
 
@@ -39,141 +91,119 @@ export default function DashboardOverviewPage() {
         </div>
       </div>
 
-      {/* Readiness / Onboarding Action Card */}
-      <div className="relative overflow-hidden rounded-2xl border border-blue-500/30 bg-gradient-to-r from-blue-900/30 via-slate-900 to-slate-900 p-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1 text-xs font-semibold text-blue-400 border border-blue-500/20">
-              <Sparkles className="h-3.5 w-3.5" />
-              Agent Readiness: 80% Ready
+      {/* Setup Progress Card */}
+      {channelsCount === 0 && (
+        <div className="relative overflow-hidden rounded-2xl border border-blue-500/30 bg-gradient-to-r from-blue-900/30 via-slate-900 to-slate-900 p-6">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1 text-xs font-semibold text-blue-400 border border-blue-500/20">
+                <Sparkles className="h-3.5 w-3.5" />
+                Setup Checklist: Connect Channel
+              </div>
+              <h2 className="text-lg font-bold text-white">
+                Connect your Facebook Page to start automating customer replies
+              </h2>
+              <p className="text-xs text-slate-300 max-w-xl">
+                Your AI agent is trained with initial business rules. Connect your Facebook Business Page or test in the mobile simulator before going live.
+              </p>
             </div>
-            <h2 className="text-lg font-bold text-white">
-              Connect your Facebook Page to go live!
-            </h2>
-            <p className="text-xs text-slate-300 max-w-xl">
-              Your AI agent has learned your delivery rules and sample products. Connect your Facebook Page to start answering customer inquiries automatically.
-            </p>
+
+            <Link
+              href="/dashboard/channels"
+              className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-500 shrink-0"
+            >
+              <Share2 className="h-4 w-4" />
+              Connect Channels
+            </Link>
           </div>
-
-          <Link
-            href="/dashboard/channels"
-            className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-500 shrink-0"
-          >
-            <Share2 className="h-4 w-4" />
-            Connect Facebook Page
-          </Link>
         </div>
-      </div>
+      )}
 
-      {/* KPI Stats Grid */}
+      {/* Real KPI Stats Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-xs font-medium uppercase tracking-wider">Total Conversations</span>
             <MessageSquare className="h-4 w-4 text-blue-400" />
           </div>
-          <div className="mt-3 text-2xl font-bold text-white">128</div>
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-emerald-400">
-            <TrendingUp className="h-3.5 w-3.5" />
-            +24% from last week
+          <div className="mt-3 text-2xl font-bold text-white">{conversationsCount}</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {conversationsCount === 0 ? "Awaiting first customer contact" : "Live threads in inbox"}
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-medium uppercase tracking-wider">AI Automated Replies</span>
-            <Bot className="h-4 w-4 text-blue-400" />
+            <span className="text-xs font-medium uppercase tracking-wider">Connected Channels</span>
+            <Share2 className="h-4 w-4 text-blue-400" />
           </div>
-          <div className="mt-3 text-2xl font-bold text-white">512</div>
-          <div className="mt-1 text-[11px] text-slate-400">
-            94% handled without human intervention
+          <div className="mt-3 text-2xl font-bold text-white">{channelsCount}</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {channelsCount === 0 ? "No channels active yet" : "Facebook / Instagram pages"}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
+          <div className="flex items-center justify-between text-slate-400">
+            <span className="text-xs font-medium uppercase tracking-wider">Trained Rules & FAQs</span>
+            <BookOpen className="h-4 w-4 text-emerald-400" />
+          </div>
+          <div className="mt-3 text-2xl font-bold text-emerald-400">{knowledgeCount}</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Knowledge base policies loaded
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-xs font-medium uppercase tracking-wider">Orders Captured</span>
-            <Truck className="h-4 w-4 text-emerald-400" />
+            <Truck className="h-4 w-4 text-purple-400" />
           </div>
-          <div className="mt-3 text-2xl font-bold text-emerald-400">18</div>
-          <div className="mt-1 text-[11px] text-slate-400">
-            ৳ 24,500 gross sales value
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-medium uppercase tracking-wider">Human Handoffs</span>
-            <AlertTriangle className="h-4 w-4 text-amber-400" />
-          </div>
-          <div className="mt-3 text-2xl font-bold text-white">7</div>
-          <div className="mt-1 text-[11px] text-slate-400">
-            Requires agent review
+          <div className="mt-3 text-2xl font-bold text-purple-400">{ordersCount}</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {ordersCount === 0 ? "No orders captured yet" : "Pending courier dispatch"}
           </div>
         </div>
       </div>
 
-      {/* Split Section: Recent Customer Inquiries vs Channel Status */}
+      {/* Real Empty State for Recent Inquiries */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Recent Conversations */}
-        <div className="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
+        <div className="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-950/60 p-8">
           <div className="flex items-center justify-between border-b border-slate-800 pb-4">
             <div>
               <h3 className="text-sm font-bold text-white">Live Customer Inquiries</h3>
-              <p className="text-xs text-slate-400">Real-time messages across your channels</p>
+              <p className="text-xs text-slate-400">Real-time incoming customer inquiries</p>
             </div>
             <Link
               href="/dashboard/inbox"
               className="flex items-center gap-1 text-xs font-semibold text-blue-400 hover:text-blue-300"
             >
-              View all
+              Open Inbox
               <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </div>
 
-          <div className="mt-4 divide-y divide-slate-800/60">
-            {[
-              {
-                name: "Tanvir Ahmed",
-                msg: "Bhai Cotton Shirt tar size L ache? Ar delivery charge koto?",
-                time: "2m ago",
-                status: "AI Replied",
-                statusColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-              },
-              {
-                name: "Nusrat Jahan",
-                msg: "Ami amar order track korte chai. Order id #781",
-                time: "14m ago",
-                status: "AI Replied",
-                statusColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-              },
-              {
-                name: "Mahmud Hasan",
-                msg: "Custom size banano jabe kina janaben please?",
-                time: "32m ago",
-                status: "Human Handoff",
-                statusColor: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-              },
-            ].map((c, i) => (
-              <div key={i} className="flex items-center justify-between py-3.5">
-                <div className="min-w-0 pr-4">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-white">{c.name}</span>
-                    <span className="text-[10px] text-slate-500">{c.time}</span>
-                  </div>
-                  <p className="mt-1 truncate text-xs text-slate-400">{c.msg}</p>
-                </div>
-                <span
-                  className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold whitespace-nowrap ${c.statusColor}`}
-                >
-                  {c.status}
-                </span>
-              </div>
-            ))}
+          <div className="py-12 text-center space-y-3">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900 text-slate-500 border border-slate-800">
+              <MessageSquare className="h-6 w-6" />
+            </div>
+            <h4 className="text-sm font-bold text-white">No customer conversations yet</h4>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              Once you connect a Facebook Page or Instagram account, customer messages will appear here and the AI will auto-reply according to your rules.
+            </p>
+            <div className="pt-2">
+              <Link
+                href="/dashboard/test-arena"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                <Smartphone className="h-3.5 w-3.5 text-blue-400" />
+                Simulate in Test Arena
+              </Link>
+            </div>
           </div>
         </div>
 
-        {/* Connected Channels Widget */}
+        {/* Channel Status Overview */}
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6 space-y-4">
           <h3 className="text-sm font-bold text-white">Channel Status</h3>
 
@@ -215,7 +245,7 @@ export default function DashboardOverviewPage() {
                 </div>
                 <div>
                   <div className="text-xs font-bold text-white">WhatsApp Business</div>
-                  <div className="text-[11px] text-slate-500">Coming soon</div>
+                  <div className="text-[11px] text-slate-500">Future Milestone</div>
                 </div>
               </div>
             </div>
