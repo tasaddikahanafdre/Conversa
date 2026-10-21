@@ -16,7 +16,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { updateWorkspaceSettingsAction } from "./actions";
 
 export default function SettingsPage() {
   const [copied, setCopied] = useState(false);
@@ -110,13 +109,19 @@ export default function SettingsPage() {
     setErrorMessage(null);
 
     try {
-      await updateWorkspaceSettingsAction({
-        workspaceId,
-        name: workspaceName,
-        languageStyle,
-        aiTone,
-        businessOverview,
+      const res = await fetch("/api/workspace/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId,
+          name: workspaceName,
+          languageStyle,
+          aiTone,
+          businessOverview,
+        }),
       });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Failed to update");
       setSuccessMessage("Workspace settings updated successfully!");
       setTimeout(() => setSuccessMessage(null), 3500);
     } catch (err: unknown) {

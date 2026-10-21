@@ -17,7 +17,6 @@ import {
   AlertCircle,
   HelpCircle,
 } from "lucide-react";
-import { completeOnboardingAction } from "./actions";
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -88,16 +87,25 @@ export default function OnboardingPage() {
     setError(null);
 
     try {
-      await completeOnboardingAction({
-        businessName: businessName || "My Store",
-        category,
-        languageStyle,
-        aiTone,
-        businessOverview,
-        deliveryDhaka,
-        deliveryOutside,
-        returnPolicy,
+      const res = await fetch("/api/onboarding/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessName: businessName || "My Store",
+          category,
+          languageStyle,
+          aiTone,
+          businessOverview,
+          deliveryDhaka,
+          deliveryOutside,
+          returnPolicy,
+        }),
       });
+
+      const result = await res.json();
+      if (!res.ok || result.error) {
+        throw new Error(result.error || "Failed to complete setup");
+      }
 
       // Clear draft on successful completion
       localStorage.removeItem("conversa_onboarding_draft");
