@@ -1,5 +1,5 @@
 -- ==============================================================================
--- CONVERSA DATABASE ARCHITECTURE & RLS SCHEMA
+-- CONVERSA DATABASE ARCHITECTURE & RLS SCHEMA (IDEMPOTENT & SAFE TO RE-RUN)
 -- Tenant-Isolated Multitenant Schema for Conversa AI Messaging Automation SaaS
 -- ==============================================================================
 
@@ -32,7 +32,6 @@ create table if not exists public.workspace_members (
   unique (workspace_id, user_id)
 );
 
--- Index for fast tenant membership lookups
 create index if not exists idx_workspace_members_user on public.workspace_members(user_id);
 create index if not exists idx_workspace_members_ws on public.workspace_members(workspace_id);
 
@@ -100,7 +99,7 @@ create table if not exists public.connected_channels (
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
   agent_id uuid references public.ai_agents(id) on delete set null,
   platform text not null check (platform in ('facebook', 'instagram', 'whatsapp')),
-  platform_id text not null, -- Facebook Page ID
+  platform_id text not null,
   account_name text not null,
   page_access_token_encrypted text not null,
   webhook_secret text,
@@ -121,7 +120,7 @@ create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
   channel_id uuid references public.connected_channels(id) on delete set null,
-  external_contact_id text not null, -- Meta PSID
+  external_contact_id text not null,
   contact_name text default 'Customer',
   ai_status text check (ai_status in ('active', 'paused', 'disabled')) default 'active',
   unread_count int default 0,
@@ -180,7 +179,7 @@ create table if not exists public.billing_transactions (
   type text not null check (type in ('recharge', 'usage_deduction', 'refund')),
   amount_bdt numeric(10, 2) not null,
   balance_after numeric(12, 2) not null,
-  payment_method text, -- 'bKash', 'Nagad', 'Card'
+  payment_method text,
   trx_id text,
   reference_details jsonb default '{}'::jsonb,
   created_at timestamptz default now()
@@ -190,7 +189,6 @@ create index if not exists idx_billing_transactions_ws on public.billing_transac
 
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
--- Strict Multitenant Isolation: Users can ONLY access data in workspaces they belong to.
 -- ==============================================================================
 
 alter table public.workspaces enable row level security;
@@ -230,15 +228,18 @@ as $$
 $$;
 
 -- 1. Workspaces Policy
+drop policy if exists "Users can view workspaces they belong to" on public.workspaces;
 create policy "Users can view workspaces they belong to"
   on public.workspaces for select
   using (id in (select public.user_workspace_ids()));
 
+drop policy if exists "Authenticated users can create workspaces" on public.workspaces;
 create policy "Authenticated users can create workspaces"
   on public.workspaces for insert
   to authenticated
   with check (true);
 
+drop policy if exists "Users can update workspaces they own or admin" on public.workspaces;
 create policy "Users can update workspaces they own or admin"
   on public.workspaces for update
   using (
@@ -251,20 +252,24 @@ create policy "Users can update workspaces they own or admin"
   );
 
 -- 2. Workspace Members Policy
+drop policy if exists "Users can view members in their workspaces" on public.workspace_members;
 create policy "Users can view members in their workspaces"
   on public.workspace_members for select
   using (workspace_id in (select public.user_workspace_ids()));
 
+drop policy if exists "Users can insert themselves into workspace" on public.workspace_members;
 create policy "Users can insert themselves into workspace"
   on public.workspace_members for insert
   to authenticated
   with check (user_id = auth.uid());
 
 -- 3. AI Agents Policy
+drop policy if exists "Workspace members can view AI agents" on public.ai_agents;
 create policy "Workspace members can view AI agents"
   on public.ai_agents for select
   using (public.is_workspace_member(workspace_id));
 
+drop policy if exists "Workspace admins can manage AI agents" on public.ai_agents;
 create policy "Workspace admins can manage AI agents"
   on public.ai_agents for all
   using (
@@ -277,6 +282,7 @@ create policy "Workspace admins can manage AI agents"
   );
 
 -- 4. Agent Knowledge Base Policy
+drop policy if exists "Workspace members can access agent knowledge" on public.agent_knowledge;
 create policy "Workspace members can access agent knowledge"
   on public.agent_knowledge for select
   using (
@@ -287,6 +293,7 @@ create policy "Workspace members can access agent knowledge"
     )
   );
 
+drop policy if exists "Workspace admins can edit agent knowledge" on public.agent_knowledge;
 create policy "Workspace admins can edit agent knowledge"
   on public.agent_knowledge for all
   using (
@@ -298,33 +305,40 @@ create policy "Workspace admins can edit agent knowledge"
   );
 
 -- 5. Products Policy
+drop policy if exists "Workspace members can view products" on public.products;
 create policy "Workspace members can view products"
   on public.products for select
   using (public.is_workspace_member(workspace_id));
 
+drop policy if exists "Workspace admins can manage products" on public.products;
 create policy "Workspace admins can manage products"
   on public.products for all
   using (public.is_workspace_member(workspace_id));
 
 -- 6. Connected Channels Policy
+drop policy if exists "Workspace members can view connected channels" on public.connected_channels;
 create policy "Workspace members can view connected channels"
   on public.connected_channels for select
   using (public.is_workspace_member(workspace_id));
 
+drop policy if exists "Workspace admins can manage channels" on public.connected_channels;
 create policy "Workspace admins can manage channels"
   on public.connected_channels for all
   using (public.is_workspace_member(workspace_id));
 
 -- 7. Conversations Policy
+drop policy if exists "Workspace members can view conversations" on public.conversations;
 create policy "Workspace members can view conversations"
   on public.conversations for select
   using (public.is_workspace_member(workspace_id));
 
+drop policy if exists "Workspace members can update conversations" on public.conversations;
 create policy "Workspace members can update conversations"
   on public.conversations for update
   using (public.is_workspace_member(workspace_id));
 
 -- 8. Messages Policy
+drop policy if exists "Workspace members can view messages" on public.messages;
 create policy "Workspace members can view messages"
   on public.messages for select
   using (
@@ -335,6 +349,7 @@ create policy "Workspace members can view messages"
     )
   );
 
+drop policy if exists "Workspace members can send messages" on public.messages;
 create policy "Workspace members can send messages"
   on public.messages for insert
   with check (
@@ -346,11 +361,13 @@ create policy "Workspace members can send messages"
   );
 
 -- 9. Captured Orders Policy
+drop policy if exists "Workspace members can view and update orders" on public.captured_orders;
 create policy "Workspace members can view and update orders"
   on public.captured_orders for all
   using (public.is_workspace_member(workspace_id));
 
 -- 10. Billing Policy
+drop policy if exists "Workspace owners can view billing transactions" on public.billing_transactions;
 create policy "Workspace owners can view billing transactions"
   on public.billing_transactions for select
   using (
