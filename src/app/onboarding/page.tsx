@@ -17,7 +17,7 @@ import {
   AlertCircle,
   HelpCircle,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { completeOnboardingAction } from "./actions";
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -88,80 +88,16 @@ export default function OnboardingPage() {
     setError(null);
 
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        // Fallback for unauthenticated dev preview
-        console.warn("Dev mode: User not logged in, redirecting to dashboard");
-        router.push("/dashboard");
-        return;
-      }
-
-      const slug = `${businessName.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${Math.random()
-        .toString(36)
-        .substring(2, 7)}`;
-
-      // 1. Create Workspace
-      const { data: workspace, error: wsError } = await supabase
-        .from("workspaces")
-        .insert({
-          name: businessName || "My Business",
-          slug,
-          currency: "BDT",
-          balance_bdt: 50.0, // Welcome credit
-        })
-        .select()
-        .single();
-
-      if (wsError) throw wsError;
-
-      // 2. Add User as Workspace Owner
-      const { error: memberError } = await supabase.from("workspace_members").insert({
-        workspace_id: workspace.id,
-        user_id: user.id,
-        role: "owner",
+      await completeOnboardingAction({
+        businessName: businessName || "My Store",
+        category,
+        languageStyle,
+        aiTone,
+        businessOverview,
+        deliveryDhaka,
+        deliveryOutside,
+        returnPolicy,
       });
-
-      if (memberError) throw memberError;
-
-      // 3. Create Default AI Agent
-      const personaPrompt = `You are a polite, helpful customer service agent representing ${businessName} in Bangladesh. Speak in natural ${languageStyle} with a ${aiTone} tone. ${businessOverview}`;
-
-      const { data: agent, error: agentError } = await supabase
-        .from("ai_agents")
-        .insert({
-          workspace_id: workspace.id,
-          name: "Conversa Assistant",
-          persona_prompt: personaPrompt,
-          business_type: category,
-          business_overview: businessOverview,
-          language_style: languageStyle,
-          primary_model: "gemini-1.5-flash",
-          is_active: true,
-        })
-        .select()
-        .single();
-
-      if (agentError) throw agentError;
-
-      // 4. Save Initial Knowledge Rules
-      await supabase.from("agent_knowledge").insert([
-        {
-          agent_id: agent.id,
-          category: "delivery",
-          title: "Standard Delivery Fees",
-          content: `Delivery fee is ৳${deliveryDhaka} inside Dhaka, and ৳${deliveryOutside} outside Dhaka.`,
-        },
-        {
-          agent_id: agent.id,
-          category: "return_policy",
-          title: "Return and Replacement Policy",
-          content: returnPolicy,
-        },
-      ]);
 
       // Clear draft on successful completion
       localStorage.removeItem("conversa_onboarding_draft");
