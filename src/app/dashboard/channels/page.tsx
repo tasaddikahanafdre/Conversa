@@ -75,6 +75,8 @@ function ChannelsContent() {
   // Error banners from URL params
   const [urlAlert, setUrlAlert] = useState<{ type: "error" | "info" | "success"; text: string } | null>(null);
 
+  const [quickConnecting, setQuickConnecting] = useState(false);
+
   // Fetch channel status on mount
   const fetchStatus = async () => {
     try {
@@ -94,6 +96,29 @@ function ChannelsContent() {
     }
   };
 
+  const handleQuickConnect = async () => {
+    setQuickConnecting(true);
+    try {
+      const res = await fetch("/api/channels/facebook/quick-connect", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setUrlAlert({
+          type: "success",
+          text: `Successfully connected ${data.channel.accountName}! Conversa AI is now actively automating Messenger.`,
+        });
+        await fetchStatus();
+      } else {
+        alert(data.error || "Failed to connect channel");
+      }
+    } catch (err: any) {
+      alert("Error: " + err.message);
+    } finally {
+      setQuickConnecting(false);
+    }
+  };
+
   useEffect(() => {
     fetchStatus();
 
@@ -102,6 +127,14 @@ function ChannelsContent() {
     const message = searchParams.get("message");
     const selectPage = searchParams.get("select_page");
     const sessionId = searchParams.get("session_id");
+    const connectedPage = searchParams.get("connected_page");
+
+    if (connectedPage) {
+      setUrlAlert({
+        type: "success",
+        text: `Successfully connected ${decodeURIComponent(connectedPage)}! Conversa AI is now actively automating Messenger.`,
+      });
+    }
 
     if (error) {
       if (error === "meta_not_configured") {
@@ -449,13 +482,28 @@ function ChannelsContent() {
                 </button>
               </div>
             ) : (
-              <button
-                onClick={handleInitiateOAuth}
-                className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white shadow-md shadow-blue-600/30 transition hover:bg-blue-500"
-              >
-                <Share2 className="h-4 w-4" />
-                Connect Facebook Page
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={handleInitiateOAuth}
+                  className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white shadow-md shadow-blue-600/30 transition hover:bg-blue-500"
+                >
+                  <Share2 className="h-4 w-4" />
+                  Connect with Facebook
+                </button>
+                <button
+                  onClick={handleQuickConnect}
+                  disabled={quickConnecting}
+                  className="flex items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-600/10 px-4 py-2.5 text-xs font-semibold text-blue-400 hover:bg-blue-600/20 transition disabled:opacity-50"
+                  title="Instantly connects your Page without waiting on Meta Developer App setup"
+                >
+                  {quickConnecting ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                  )}
+                  1-Click Instant Connect
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -872,12 +920,22 @@ function ChannelsContent() {
               </div>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  setShowSetupGuide(false);
+                  handleQuickConnect();
+                }}
+                className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-950/30 px-4 py-2 text-xs font-semibold text-emerald-400 hover:bg-emerald-950/50 transition"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                1-Click Instant Connect (Skip Setup)
+              </button>
               <button
                 onClick={() => setShowSetupGuide(false)}
                 className="rounded-xl bg-blue-600 px-5 py-2 text-xs font-semibold text-white hover:bg-blue-500 transition"
               >
-                Got It
+                Close
               </button>
             </div>
           </div>

@@ -5,6 +5,7 @@ import {
   exchangeCodeForUserToken,
   exchangeForLongLivedUserToken,
   getAuthorizedPages,
+  subscribePageToApp,
 } from "@/lib/meta/client";
 import { encryptToken } from "@/lib/security/encryption";
 
@@ -77,7 +78,6 @@ export async function GET(request: NextRequest) {
       .maybeSingle();
 
     if (sessionError || !session) {
-      // If table query failed or not found, verify if we have cookieWorkspace
       if (!cookieWorkspace) {
         return NextResponse.redirect(
           new URL(
@@ -116,6 +116,17 @@ export async function GET(request: NextRequest) {
     // 6. Fetch authorized pages the user manages
     const candidatePages = await getAuthorizedPages(longLivedToken);
 
+    if (candidatePages.length === 0) {
+      return NextResponse.redirect(
+        new URL(
+          `/dashboard/channels?error=no_pages&message=${encodeURIComponent(
+            "No Facebook Pages found for this account. Ensure you are an Admin or Editor of a Facebook Page."
+          )}`,
+          request.url
+        )
+      );
+    }
+
     // 7. Encrypt page access tokens immediately before any storage (AES-256-GCM)
     const sanitizedCandidates = candidatePages.map((page) => ({
       id: page.id,
@@ -126,7 +137,59 @@ export async function GET(request: NextRequest) {
       encryptedAccessToken: encryptToken(page.accessToken),
     }));
 
-    // 8. Store candidate pages in the session record
+    // 8. AUTO-CONNECT IF EXACTLY 1 PAGE: ZERO EXTRA CLICKS ("Accept permissions and done!")
+    if (candidatePages.length === 1) {
+      const page = candidatePages[0];
+      const encryptedToken = sanitizedCandidates[0].encryptedAccessToken;
+
+      // Subscribe page webhook
+      await subscribePageToApp(page.id, page.accessToken);
+
+      // Find default AI agent for workspace
+      const { data: defaultAgent } = await adminClient
+        .from("ai_agents")
+        .select("id")
+        .eq("workspace_id", targetWorkspaceId)
+        .limit(1)
+        .maybeSingle();
+
+      // Upsert connected channel
+      await adminClient.from("connected_channels").upsert(
+        {
+          workspace_id: targetWorkspaceId,
+          platform: "facebook",
+          platform_id: page.id,
+          account_name: page.name,
+          page_access_token_encrypted: encryptedToken,
+          page_picture_url: page.pictureUrl || null,
+          is_active: true,
+          status: "active",
+          automation_enabled: true,
+          comment_reply_enabled: true,
+          permissions: page.tasks || [],
+          connected_at: new Date().toISOString(),
+          last_verified_at: new Date().toISOString(),
+          disconnected_at: null,
+          agent_id: defaultAgent?.id || null,
+        },
+        { onConflict: "platform,platform_id" }
+      );
+
+      // Clean up session & cookies
+      if (session?.id) {
+        await adminClient.from("meta_oauth_sessions").delete().eq("id", session.id);
+      }
+      cookieStore.delete("meta_pending_session");
+      cookieStore.delete("meta_oauth_state");
+      cookieStore.delete("meta_oauth_workspace");
+
+      // Redirect straight back to dashboard with instant success notification
+      const redirectUrl = new URL("/dashboard/channels", request.url);
+      redirectUrl.searchParams.set("connected_page", page.name);
+      return NextResponse.redirect(redirectUrl);
+    }
+
+    // 9. If user manages MULTIPLE pages: store session so user can pick which one to connect
     let sessionId = session?.id;
     if (sessionId) {
       await adminClient
@@ -136,7 +199,6 @@ export async function GET(request: NextRequest) {
         })
         .eq("id", sessionId);
     } else {
-      // Create session record if not found previously
       const { data: newSession } = await adminClient
         .from("meta_oauth_sessions")
         .insert({
@@ -151,7 +213,6 @@ export async function GET(request: NextRequest) {
       sessionId = newSession?.id;
     }
 
-    // Set temporary session ID cookie to aid client retrieval
     cookieStore.set("meta_pending_session", sessionId || state, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -159,11 +220,8 @@ export async function GET(request: NextRequest) {
       maxAge: 900,
       path: "/",
     });
-
-    // Clean up login cookies
     cookieStore.delete("meta_oauth_state");
 
-    // 9. Redirect user to Channels page with selection modal query
     const redirectUrl = new URL("/dashboard/channels", request.url);
     redirectUrl.searchParams.set("select_page", "1");
     if (sessionId) {

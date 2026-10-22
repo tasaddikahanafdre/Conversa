@@ -77,8 +77,8 @@ async function callGeminiApi(
   messages: ChatMessage[],
   options: AICompletionOptions
 ): Promise<AICompletionResponse> {
-  const model = options.model || "gemini-1.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const primaryModel = options.model || "gemini-3.5-flash";
+  const candidateModels = [primaryModel, "gemini-flash-lite-latest", "gemini-flash-latest"];
 
   const contents = messages
     .filter((m) => m.role !== "system")
@@ -101,33 +101,46 @@ async function callGeminiApi(
     };
   }
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let lastError: Error | null = null;
 
-  if (!res.ok) {
-    const errorDetails = await res.text();
-    throw new Error(`Gemini API returned error (${res.status}): ${errorDetails}`);
+  for (const model of candidateModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const errorDetails = await res.text();
+        console.warn(`[Gemini API Warning] Model ${model} returned ${res.status}. Attempting fallback...`);
+        lastError = new Error(`Gemini API returned error (${res.status}): ${errorDetails}`);
+        continue;
+      }
+
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const promptTokens = data.usageMetadata?.promptTokenCount || 50;
+      const completionTokens = data.usageMetadata?.candidatesTokenCount || 25;
+
+      return {
+        text,
+        provider: "google-gemini",
+        model,
+        tokensUsed: {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+        },
+        costBdt: calculateGeminiBdtCost(promptTokens, completionTokens),
+      };
+    } catch (err: any) {
+      lastError = err;
+    }
   }
 
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  const promptTokens = data.usageMetadata?.promptTokenCount || 50;
-  const completionTokens = data.usageMetadata?.candidatesTokenCount || 25;
-
-  return {
-    text,
-    provider: "google-gemini",
-    model,
-    tokensUsed: {
-      promptTokens,
-      completionTokens,
-      totalTokens: promptTokens + completionTokens,
-    },
-    costBdt: calculateGeminiBdtCost(promptTokens, completionTokens),
-  };
+  throw lastError || new Error("Failed to generate content with Gemini API.");
 }
 
 /**
