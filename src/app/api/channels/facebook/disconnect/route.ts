@@ -60,16 +60,29 @@ export async function POST(request: NextRequest) {
 
     // 4. Safely mark channel as inactive and disconnected
     // Note: We deliberately do NOT delete conversation history or order records.
-    const nowIso = new Date().toISOString();
-    const { error: updateError } = await adminClient
-      .from("connected_channels")
-      .update({
-        is_active: false,
-        status: "disconnected",
-        disconnected_at: nowIso,
-        automation_enabled: false,
-      })
-      .eq("id", channel.id);
+    let updateError = (
+      await adminClient
+        .from("connected_channels")
+        .update({
+          is_active: false,
+          status: "disconnected",
+          disconnected_at: new Date().toISOString(),
+          automation_enabled: false,
+        })
+        .eq("id", channel.id)
+    ).error;
+
+    // Fallback if extended columns are not yet migrated
+    if (updateError && updateError.message.includes("column")) {
+      const fallbackResult = await adminClient
+        .from("connected_channels")
+        .update({
+          is_active: false,
+          automation_enabled: false,
+        })
+        .eq("id", channel.id);
+      updateError = fallbackResult.error;
+    }
 
     if (updateError) {
       console.error("[Disconnect Update Error]", updateError);

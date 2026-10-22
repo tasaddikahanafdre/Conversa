@@ -111,7 +111,7 @@ export async function POST(request: NextRequest) {
       .limit(1)
       .maybeSingle();
 
-    const channelPayload: any = {
+    const basePayload: any = {
       workspace_id: targetWorkspaceId,
       platform: "facebook",
       platform_id: pageId,
@@ -124,19 +124,11 @@ export async function POST(request: NextRequest) {
       agent_id: defaultAgent?.id || null,
     };
 
-    // Include extended columns if supported
-    if (selectedPage.pictureUrl) {
-      channelPayload.page_picture_url = selectedPage.pictureUrl;
-    }
-    channelPayload.status = "active";
-    channelPayload.last_verified_at = new Date().toISOString();
-    channelPayload.permissions = selectedPage.tasks || [];
-
     const { data: connectedChannel, error: saveError } = await adminClient
       .from("connected_channels")
-      .upsert(channelPayload, { onConflict: "platform,platform_id" })
+      .upsert(basePayload, { onConflict: "platform,platform_id" })
       .select(
-        "id, workspace_id, platform, platform_id, account_name, is_active, automation_enabled, comment_reply_enabled, connected_at, created_at"
+        "id, workspace_id, platform, platform_id, account_name, is_active, automation_enabled, comment_reply_enabled, connected_at"
       )
       .single();
 
@@ -146,6 +138,21 @@ export async function POST(request: NextRequest) {
         { error: `Failed to save channel connection: ${saveError.message}` },
         { status: 500 }
       );
+    }
+
+    // Try optional extended fields
+    try {
+      await adminClient
+        .from("connected_channels")
+        .update({
+          page_picture_url: selectedPage.pictureUrl || null,
+          status: "active",
+          last_verified_at: new Date().toISOString(),
+          permissions: selectedPage.tasks || [],
+        })
+        .eq("id", connectedChannel.id);
+    } catch {
+      // Ignored if migration columns not yet added
     }
 
     // 8. Clean up temporary oauth session

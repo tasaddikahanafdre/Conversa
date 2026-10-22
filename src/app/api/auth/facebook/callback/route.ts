@@ -153,27 +153,42 @@ export async function GET(request: NextRequest) {
         .limit(1)
         .maybeSingle();
 
-      // Upsert connected channel
-      await adminClient.from("connected_channels").upsert(
-        {
-          workspace_id: targetWorkspaceId,
-          platform: "facebook",
-          platform_id: page.id,
-          account_name: page.name,
-          page_access_token_encrypted: encryptedToken,
-          page_picture_url: page.pictureUrl || null,
-          is_active: true,
-          status: "active",
-          automation_enabled: true,
-          comment_reply_enabled: true,
-          permissions: page.tasks || [],
-          connected_at: new Date().toISOString(),
-          last_verified_at: new Date().toISOString(),
-          disconnected_at: null,
-          agent_id: defaultAgent?.id || null,
-        },
-        { onConflict: "platform,platform_id" }
-      );
+      // Upsert connected channel using base columns guaranteed in database
+      const basePayload: any = {
+        workspace_id: targetWorkspaceId,
+        platform: "facebook",
+        platform_id: page.id,
+        account_name: page.name,
+        page_access_token_encrypted: encryptedToken,
+        is_active: true,
+        automation_enabled: true,
+        comment_reply_enabled: true,
+        connected_at: new Date().toISOString(),
+        agent_id: defaultAgent?.id || null,
+      };
+
+      const { data: savedChannel } = await adminClient
+        .from("connected_channels")
+        .upsert(basePayload, { onConflict: "platform,platform_id" })
+        .select("id")
+        .single();
+
+      // Optionally update extended attributes if schema has been upgraded
+      if (savedChannel?.id) {
+        try {
+          await adminClient
+            .from("connected_channels")
+            .update({
+              page_picture_url: page.pictureUrl || null,
+              status: "active",
+              last_verified_at: new Date().toISOString(),
+              permissions: page.tasks || [],
+            })
+            .eq("id", savedChannel.id);
+        } catch {
+          // Ignored if optional columns pending migration
+        }
+      }
 
       // Clean up session & cookies
       if (session?.id) {

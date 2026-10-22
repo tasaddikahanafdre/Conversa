@@ -64,35 +64,25 @@ export async function POST(request: NextRequest) {
     const encryptedToken = encryptToken(demoPlainToken);
     const platformId = `10${Math.floor(1000000000 + Math.random() * 9000000000)}`;
 
-    // Upsert into connected_channels
+    // Base payload with columns guaranteed to exist in the database
+    const basePayload: Record<string, any> = {
+      workspace_id: workspaceId,
+      platform: "facebook",
+      platform_id: platformId,
+      account_name: `${businessName} (Official Page)`,
+      page_access_token_encrypted: encryptedToken,
+      is_active: true,
+      automation_enabled: true,
+      comment_reply_enabled: true,
+      connected_at: new Date().toISOString(),
+      agent_id: defaultAgent?.id || null,
+    };
+
+    // Attempt upsert with base columns (backwards compatible with base schema)
     const { data: channel, error: upsertError } = await adminClient
       .from("connected_channels")
-      .upsert(
-        {
-          workspace_id: workspaceId,
-          platform: "facebook",
-          platform_id: platformId,
-          account_name: `${businessName} (Official Page)`,
-          page_access_token_encrypted: encryptedToken,
-          page_picture_url: null,
-          is_active: true,
-          status: "active",
-          automation_enabled: true,
-          comment_reply_enabled: true,
-          permissions: [
-            "pages_messaging",
-            "pages_show_list",
-            "pages_read_engagement",
-            "pages_manage_metadata",
-          ],
-          connected_at: new Date().toISOString(),
-          last_verified_at: new Date().toISOString(),
-          disconnected_at: null,
-          agent_id: defaultAgent?.id || null,
-        },
-        { onConflict: "platform,platform_id" }
-      )
-      .select()
+      .upsert(basePayload, { onConflict: "platform,platform_id" })
+      .select("id, platform, platform_id, account_name, is_active, connected_at")
       .single();
 
     if (upsertError) {
@@ -100,6 +90,20 @@ export async function POST(request: NextRequest) {
         { error: `Database error: ${upsertError.message}` },
         { status: 500 }
       );
+    }
+
+    // Try updating optional extended columns if the table has them
+    try {
+      await adminClient
+        .from("connected_channels")
+        .update({
+          status: "active",
+          last_verified_at: new Date().toISOString(),
+          permissions: ["pages_messaging", "pages_show_list", "pages_read_engagement", "pages_manage_metadata"],
+        })
+        .eq("id", channel.id);
+    } catch {
+      // Ignored if migration not yet applied
     }
 
     return NextResponse.json({
@@ -110,7 +114,7 @@ export async function POST(request: NextRequest) {
         platformId: channel.platform_id,
         accountName: channel.account_name,
         isActive: channel.is_active,
-        status: channel.status,
+        status: "active",
         connectedAt: channel.connected_at,
       },
     });
