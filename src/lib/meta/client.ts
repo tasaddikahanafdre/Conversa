@@ -68,9 +68,8 @@ export function getMetaOAuthUrl(state: string, origin?: string): string {
   const redirectUri = getMetaRedirectUri(origin);
   const version = getMetaGraphApiVersion();
 
-  // Scopes for connecting user's Facebook Pages
-  // Default to pages_show_list so Meta approves without needing advanced use case reviews in dev
-  const scopes = process.env.META_OAUTH_SCOPES || "pages_show_list";
+  // Scopes for connecting user's Facebook Pages and automating Messenger
+  const scopes = process.env.META_OAUTH_SCOPES || "pages_show_list,pages_messaging";
 
   const params = new URLSearchParams({
     client_id: appId,
