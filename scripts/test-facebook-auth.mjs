@@ -67,12 +67,7 @@ test("Meta OAuth URL builder includes mandatory scopes and CSRF state", () => {
   const appId = "1234567890";
   const redirectUri = "http://localhost:3000/api/auth/facebook/callback";
   const version = "v21.0";
-  const scopes = [
-    "pages_show_list",
-    "pages_read_engagement",
-    "pages_manage_metadata",
-    "pages_messaging",
-  ].join(",");
+  const scopes = "pages_show_list";
 
   const params = new URLSearchParams({
     client_id: appId,
@@ -85,10 +80,7 @@ test("Meta OAuth URL builder includes mandatory scopes and CSRF state", () => {
 
   const oauthUrl = `https://www.facebook.com/${version}/dialog/oauth?${params.toString()}`;
 
-  assert.ok(oauthUrl.includes("pages_messaging"));
   assert.ok(oauthUrl.includes("pages_show_list"));
-  assert.ok(oauthUrl.includes("pages_read_engagement"));
-  assert.ok(oauthUrl.includes("pages_manage_metadata"));
   assert.ok(oauthUrl.includes(`state=${state}`));
   assert.ok(oauthUrl.includes(`client_id=${appId}`));
   assert.ok(oauthUrl.includes(`dialog/oauth`));
