@@ -261,3 +261,39 @@ export async function verifyPageToken(
     };
   }
 }
+
+/**
+ * Sends a message to a customer via the Meta Messenger Send API
+ * Reference: https://developers.facebook.com/docs/messenger-platform/reference/send-api
+ */
+export async function sendMessengerMessage(
+  pageAccessToken: string,
+  recipientId: string,
+  messageText: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const version = getMetaGraphApiVersion();
+  const url = `https://graph.facebook.com/${version}/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient: { id: recipientId },
+        message: { text: messageText },
+        messaging_type: "RESPONSE",
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      console.error("[Meta Send API Error]", data.error);
+      return { success: false, error: data.error?.message || "Failed to send message" };
+    }
+
+    return { success: true, messageId: data.message_id };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Network error sending message";
+    return { success: false, error: msg };
+  }
+}
