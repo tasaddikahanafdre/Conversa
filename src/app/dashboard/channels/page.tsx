@@ -75,7 +75,40 @@ function ChannelsContent() {
   // Error banners from URL params
   const [urlAlert, setUrlAlert] = useState<{ type: "error" | "info" | "success"; text: string } | null>(null);
 
-  const [quickConnecting, setQuickConnecting] = useState(false);
+  // Inline Meta Credentials input
+  const [appIdInput, setAppIdInput] = useState("");
+  const [appSecretInput, setAppSecretInput] = useState("");
+  const [savingMetaConfig, setSavingMetaConfig] = useState(false);
+
+  const handleSaveMetaConfig = async () => {
+    if (!appIdInput.trim() || !appSecretInput.trim()) {
+      alert("Please provide both Meta App ID and Meta App Secret.");
+      return;
+    }
+    setSavingMetaConfig(true);
+    try {
+      const res = await fetch("/api/channels/facebook/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appId: appIdInput.trim(),
+          appSecret: appSecretInput.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setIsMetaConfigured(true);
+        // Immediately redirect to official Facebook OAuth
+        window.location.href = "/api/auth/facebook/login";
+      } else {
+        alert(data.error || "Failed to save configuration.");
+      }
+    } catch (err: any) {
+      alert("Error saving: " + err.message);
+    } finally {
+      setSavingMetaConfig(false);
+    }
+  };
 
   // Fetch channel status on mount
   const fetchStatus = async () => {
@@ -93,29 +126,6 @@ function ChannelsContent() {
       console.error("Failed to load channel status:", err);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleQuickConnect = async () => {
-    setQuickConnecting(true);
-    try {
-      const res = await fetch("/api/channels/facebook/quick-connect", {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setUrlAlert({
-          type: "success",
-          text: `Successfully connected ${data.channel.accountName}! Conversa AI is now actively automating Messenger.`,
-        });
-        await fetchStatus();
-      } else {
-        alert(data.error || "Failed to connect channel");
-      }
-    } catch (err: any) {
-      alert("Error: " + err.message);
-    } finally {
-      setQuickConnecting(false);
     }
   };
 
@@ -482,28 +492,13 @@ function ChannelsContent() {
                 </button>
               </div>
             ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={handleInitiateOAuth}
-                  className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white shadow-md shadow-blue-600/30 transition hover:bg-blue-500"
-                >
-                  <Share2 className="h-4 w-4" />
-                  Connect with Facebook
-                </button>
-                <button
-                  onClick={handleQuickConnect}
-                  disabled={quickConnecting}
-                  className="flex items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-600/10 px-4 py-2.5 text-xs font-semibold text-blue-400 hover:bg-blue-600/20 transition disabled:opacity-50"
-                  title="Instantly connects your Page without waiting on Meta Developer App setup"
-                >
-                  {quickConnecting ? (
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                  )}
-                  1-Click Instant Connect
-                </button>
-              </div>
+              <button
+                onClick={handleInitiateOAuth}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white shadow-md shadow-blue-600/30 transition hover:bg-blue-500"
+              >
+                <Share2 className="h-4 w-4" />
+                Connect with Facebook
+              </button>
             )}
           </div>
         </div>
@@ -521,6 +516,79 @@ function ChannelsContent() {
             <button onClick={() => setVerifyMessage(null)} className="text-slate-400 hover:text-white">
               <X className="h-3.5 w-3.5" />
             </button>
+          </div>
+        )}
+
+        {/* Inline Meta Credentials Setup Form (Visible when not configured and not connected) */}
+        {!channel && !isMetaConfigured && (
+          <div className="rounded-xl border border-blue-500/30 bg-blue-950/20 p-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <KeyRound className="h-5 w-5 text-blue-400 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-bold text-white">
+                  Enter Your Meta Developer Credentials
+                </h4>
+                <p className="text-xs text-slate-300 mt-1 max-w-xl">
+                  To open the official Facebook sign-in dialog and select your real Facebook profile &amp; page, Meta requires your App ID and App Secret. Enter them below to redirect to facebook.com immediately:
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                  Meta App ID
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 102938475618293"
+                  value={appIdInput}
+                  onChange={(e) => setAppIdInput(e.target.value)}
+                  className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                  Meta App Secret
+                </label>
+                <input
+                  type="password"
+                  placeholder="e.g. a8f9c2d1e0..."
+                  value={appSecretInput}
+                  onChange={(e) => setAppSecretInput(e.target.value)}
+                  className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <a
+                href="https://developers.facebook.com/apps"
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-blue-400 hover:underline inline-flex items-center gap-1"
+              >
+                Open Meta Developers <ExternalLink className="h-3 w-3" />
+              </a>
+              <button
+                type="button"
+                disabled={savingMetaConfig || !appIdInput.trim() || !appSecretInput.trim()}
+                onClick={handleSaveMetaConfig}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2 text-xs font-semibold text-white hover:bg-blue-500 transition disabled:opacity-50"
+              >
+                {savingMetaConfig ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    Opening Facebook Login...
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="h-3.5 w-3.5" />
+                    Save &amp; Open Facebook Login
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         )}
 
@@ -920,17 +988,7 @@ function ChannelsContent() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-              <button
-                onClick={() => {
-                  setShowSetupGuide(false);
-                  handleQuickConnect();
-                }}
-                className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-950/30 px-4 py-2 text-xs font-semibold text-emerald-400 hover:bg-emerald-950/50 transition"
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                1-Click Instant Connect (Skip Setup)
-              </button>
+            <div className="flex items-center justify-end pt-3 border-t border-slate-800">
               <button
                 onClick={() => setShowSetupGuide(false)}
                 className="rounded-xl bg-blue-600 px-5 py-2 text-xs font-semibold text-white hover:bg-blue-500 transition"
