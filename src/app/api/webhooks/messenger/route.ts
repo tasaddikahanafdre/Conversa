@@ -1,9 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptToken } from "@/lib/security/encryption";
 import { sendMessengerMessage } from "@/lib/meta/client";
 import { generateAiReply, ChatMessage } from "@/lib/ai/provider";
+
+export const maxDuration = 60; // Allow background execution up to 60s for AI and Meta APIs
 
 // GET: Meta Webhook Verification Challenge
 export async function GET(request: NextRequest) {
@@ -59,42 +61,45 @@ export async function POST(request: NextRequest) {
 
     // Meta expects a fast 200 OK within 5 seconds to avoid event retries
     if (payload.object === "page") {
-      for (const entry of payload.entry || []) {
-        const pageId = entry.id;
-        const messaging = entry.messaging || [];
+      // Schedule background processing via Next.js 15 after()
+      // This returns HTTP 200 OK to Meta in < 25ms, avoiding any webhook timeout or retry throttling
+      after(async () => {
+        for (const entry of payload.entry || []) {
+          const pageId = entry.id;
+          const messaging = entry.messaging || [];
 
-        for (const event of messaging) {
-          // Ignore echo messages sent by the Page itself
-          if (event.message?.is_echo) continue;
+          for (const event of messaging) {
+            // Ignore echo messages sent by the Page itself
+            if (event.message?.is_echo) continue;
 
-          const senderId = event.sender?.id;
-          const text = event.message?.text?.trim() || "";
-          const messageId = event.message?.mid;
-          const attachments = event.message?.attachments || [];
-          const imageAttachment = attachments.find((a: any) => a.type === "image");
-          const mediaUrl = imageAttachment?.payload?.url || null;
+            const senderId = event.sender?.id;
+            const text = event.message?.text?.trim() || "";
+            const messageId = event.message?.mid;
+            const attachments = event.message?.attachments || [];
+            const imageAttachment = attachments.find((a: any) => a.type === "image");
+            const mediaUrl = imageAttachment?.payload?.url || null;
 
-          if (senderId && (text || mediaUrl)) {
-            console.log(
-              `[Meta Webhook] Incoming message from ${senderId}: "${text}" (Media: ${mediaUrl ? "Yes" : "No"})`
-            );
+            if (senderId && (text || mediaUrl)) {
+              console.log(
+                `[Meta Webhook] Background processing for ${senderId}: "${text}" (Media: ${mediaUrl ? "Yes" : "No"})`
+              );
 
-            // Execute immediately so Serverless Function does not terminate before timer
-            try {
-              await processIncomingMessage({
-                pageId,
-                senderId,
-                messageText: text,
-                messageId,
-                mediaUrl,
-                allMessageIds: messageId ? [messageId] : [],
-              });
-            } catch (err) {
-              console.error("[Auto-Reply Pipeline Error]", err);
+              try {
+                await processIncomingMessage({
+                  pageId,
+                  senderId,
+                  messageText: text,
+                  messageId,
+                  mediaUrl,
+                  allMessageIds: messageId ? [messageId] : [],
+                });
+              } catch (err) {
+                console.error("[Auto-Reply Pipeline Error]", err);
+              }
             }
           }
         }
-      }
+      });
 
       return NextResponse.json({ status: "EVENT_RECEIVED" }, { status: 200 });
     }
@@ -236,22 +241,35 @@ async function processIncomingMessage(params: {
     return;
   }
 
-  // 6. Load AI Agent settings, Knowledge Base items, and Product Catalog
-  const { data: agent } = await adminClient
-    .from("ai_agents")
-    .select("id, name, primary_language, tone, base_system_prompt, primary_model")
-    .eq("workspace_id", channel.workspace_id)
-    .maybeSingle();
+  // 6. Load AI Agent settings, Product Catalog, and Conversation History in parallel
+  const [
+    { data: agent },
+    { data: productsList },
+    { data: recentMsgs }
+  ] = await Promise.all([
+    adminClient
+      .from("ai_agents")
+      .select("id, name, primary_language, tone, base_system_prompt, primary_model")
+      .eq("workspace_id", channel.workspace_id)
+      .maybeSingle(),
+    adminClient
+      .from("products")
+      .select("title, price, stock_quantity, description, is_available, image_urls")
+      .eq("workspace_id", channel.workspace_id),
+    adminClient
+      .from("messages")
+      .select("sender_type, content, media_url")
+      .eq("conversation_id", conv.id)
+      .order("created_at", { ascending: false })
+      .limit(6),
+  ]);
 
-  const { data: knowledgeList } = await adminClient
-    .from("agent_knowledge")
-    .select("category, title, content")
-    .eq("agent_id", agent?.id || "");
-
-  const { data: productsList } = await adminClient
-    .from("products")
-    .select("title, price, stock_quantity, description, is_available, image_urls")
-    .eq("workspace_id", channel.workspace_id);
+  const { data: knowledgeList } = agent?.id
+    ? await adminClient
+        .from("agent_knowledge")
+        .select("category, title, content")
+        .eq("agent_id", agent.id)
+    : { data: [] };
 
   // 7. Compile prompt context
   const knowledgeSummary = (knowledgeList || [])
@@ -290,14 +308,7 @@ ${productSummary || "XO1 Auto Charge Separator: ৳699 (Original product with au
 ${agent?.base_system_prompt || ""}
 `;
 
-  // 8. Fetch last 6 messages for conversation context
-  const { data: recentMsgs } = await adminClient
-    .from("messages")
-    .select("sender_type, content, media_url")
-    .eq("conversation_id", conv.id)
-    .order("created_at", { ascending: false })
-    .limit(6);
-
+  // 8. Build chat history context from loaded recent messages
   const chatHistory: ChatMessage[] = (recentMsgs || [])
     .reverse()
     .map((m) => {
