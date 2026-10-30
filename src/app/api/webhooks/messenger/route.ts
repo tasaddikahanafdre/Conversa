@@ -76,57 +76,23 @@ export async function POST(request: NextRequest) {
           const mediaUrl = imageAttachment?.payload?.url || null;
 
           if (senderId && (text || mediaUrl)) {
-            const key = `${pageId}:${senderId}`;
-            let batch = pendingBatches.get(key);
-
-            if (batch) {
-              clearTimeout(batch.timer);
-              if (text && !batch.texts.includes(text)) {
-                batch.texts.push(text);
-              }
-              if (mediaUrl && !batch.mediaUrls.includes(mediaUrl)) {
-                batch.mediaUrls.push(mediaUrl);
-              }
-              if (messageId && !batch.messageIds.includes(messageId)) {
-                batch.messageIds.push(messageId);
-              }
-            } else {
-              batch = {
-                pageId,
-                senderId,
-                texts: text ? [text] : [],
-                mediaUrls: mediaUrl ? [mediaUrl] : [],
-                messageIds: messageId ? [messageId] : [],
-                timer: setTimeout(() => {}, 0),
-              };
-              pendingBatches.set(key, batch);
-            }
-
             console.log(
-              `[Meta Webhook] Buffered message from ${senderId}: "${text}" (Media: ${mediaUrl ? "Yes" : "No"}). Total texts: ${batch.texts.length}, Total media: ${batch.mediaUrls.length}`
+              `[Meta Webhook] Incoming message from ${senderId}: "${text}" (Media: ${mediaUrl ? "Yes" : "No"})`
             );
 
-            // Debounce for 2500ms so companion photo + text caption packets from Facebook merge cleanly into ONE turn
-            batch.timer = setTimeout(async () => {
-              const currentBatch = pendingBatches.get(key);
-              pendingBatches.delete(key);
-              if (!currentBatch) return;
-
-              const combinedText = currentBatch.texts.join(" ").trim();
-              const primaryMedia = currentBatch.mediaUrls[0] || null;
-              const primaryMid = currentBatch.messageIds[0];
-
-              processIncomingMessage({
-                pageId: currentBatch.pageId,
-                senderId: currentBatch.senderId,
-                messageText: combinedText,
-                messageId: primaryMid,
-                mediaUrl: primaryMedia,
-                allMessageIds: currentBatch.messageIds,
-              }).catch((err) =>
-                console.error("[Debounced Auto-Reply Pipeline Error]", err)
-              );
-            }, 2500);
+            // Execute immediately so Serverless Function does not terminate before timer
+            try {
+              await processIncomingMessage({
+                pageId,
+                senderId,
+                messageText: text,
+                messageId,
+                mediaUrl,
+                allMessageIds: messageId ? [messageId] : [],
+              });
+            } catch (err) {
+              console.error("[Auto-Reply Pipeline Error]", err);
+            }
           }
         }
       }
