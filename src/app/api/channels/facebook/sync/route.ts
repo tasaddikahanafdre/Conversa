@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
       }
 
       const threads = convData.data || [];
+      console.log(`[Sync] Found ${threads.length} threads for channel ${channel.account_name}`);
 
       for (const thread of threads) {
         const messages = thread.messages?.data || [];
@@ -56,7 +57,10 @@ export async function POST(request: NextRequest) {
 
         const latestMsg = messages[0];
         // If the latest message was sent by the page itself, it's already answered
-        if (latestMsg.from?.id === channel.platform_id) continue;
+        if (latestMsg.from?.id === channel.platform_id) {
+          console.log(`[Sync] Thread ${thread.id} skipped: latest message from Page itself`);
+          continue;
+        }
 
         const customerId = latestMsg.from?.id;
         let customerMsgText = latestMsg.message || "";
@@ -78,7 +82,10 @@ export async function POST(request: NextRequest) {
           .eq("external_msg_id", customerMsgId)
           .maybeSingle();
 
-        if (existingMsg) continue; // Already processed!
+        if (existingMsg) {
+          console.log(`[Sync] Message ${customerMsgId} already exists in DB. Skipping.`);
+          continue;
+        }
 
         // Find or create conversation
         let { data: conv } = await adminClient
