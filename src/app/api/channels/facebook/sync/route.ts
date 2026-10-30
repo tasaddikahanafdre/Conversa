@@ -4,6 +4,10 @@ import { decryptToken } from "@/lib/security/encryption";
 import { sendMessengerMessage } from "@/lib/meta/client";
 import { generateAiReply, ChatMessage } from "@/lib/ai/provider";
 
+export async function GET(request: NextRequest) {
+  return POST(request);
+}
+
 export async function POST(request: NextRequest) {
   try {
     const adminClient = createAdminClient();
