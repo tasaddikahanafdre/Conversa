@@ -31,8 +31,9 @@ export async function POST(request: NextRequest) {
       let pageToken: string;
       try {
         pageToken = decryptToken(channel.page_access_token_encrypted);
-      } catch {
-        continue;
+      } catch (err: any) {
+        console.error(`[Sync] Decrypt token failed for ${channel.account_name}:`, err.message);
+        return NextResponse.json({ error: "Decrypt token failed", details: err.message }, { status: 500 });
       }
 
       // Fetch latest conversations from Facebook Graph API (including attachments for images)
@@ -42,6 +43,11 @@ export async function POST(request: NextRequest) {
         )}`
       );
       const convData = await res.json();
+      if (!res.ok || convData.error) {
+        console.error("[Sync] Facebook Graph API error:", convData.error);
+        return NextResponse.json({ error: "Graph API error", details: convData.error }, { status: 500 });
+      }
+
       const threads = convData.data || [];
 
       for (const thread of threads) {
