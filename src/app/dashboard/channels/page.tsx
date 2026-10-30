@@ -17,6 +17,7 @@ import {
   HelpCircle,
   Building,
 } from "lucide-react";
+import { FacebookIcon, InstagramIcon, WhatsAppIcon } from "@/components/icons/channel-icons";
 
 interface ConnectedChannel {
   id: string;
@@ -436,8 +437,8 @@ function ChannelsContent() {
       <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6 space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600/10 text-blue-500 shrink-0 border border-blue-500/20">
-              <Share2 className="h-6 w-6" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900/60 shrink-0 border border-slate-800">
+              <FacebookIcon className="h-8 w-8" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -711,18 +712,18 @@ function ChannelsContent() {
         )}
       </div>
 
-      {/* Instagram Card (Planned Roadmap) */}
+      {/* Instagram Card */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-pink-600/10 text-pink-500 shrink-0 border border-pink-500/20">
-              <Share2 className="h-6 w-6" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900/60 shrink-0 border border-slate-800">
+              <InstagramIcon className="h-8 w-8" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-white">Instagram Direct (DMs)</h3>
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-400">
-                  Coming Next
+                <span className="rounded-full bg-pink-500/10 border border-pink-500/20 px-2.5 py-0.5 text-[10px] font-bold text-pink-400">
+                  Coming Soon
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-1 max-w-xl">
@@ -734,7 +735,35 @@ function ChannelsContent() {
             disabled
             className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-500 cursor-not-allowed"
           >
-            Requires Active Facebook Page
+            Coming Soon
+          </button>
+        </div>
+      </div>
+
+      {/* WhatsApp Business Card */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900/60 shrink-0 border border-slate-800">
+              <WhatsAppIcon className="h-8 w-8" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-white">WhatsApp Business</h3>
+                <span className="rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
+                  Coming Soon
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1 max-w-xl">
+                Official WhatsApp Cloud API integration to answer customer inquiries, send automated order updates, and tracking notifications.
+              </p>
+            </div>
+          </div>
+          <button
+            disabled
+            className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-500 cursor-not-allowed"
+          >
+            Coming Soon
           </button>
         </div>
       </div>

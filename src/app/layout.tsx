@@ -5,6 +5,11 @@ export const metadata: Metadata = {
   title: "Conversa — AI Customer Support & Messaging Automation SaaS",
   description:
     "Self-service AI messaging automation for Bangladeshi businesses on Facebook Messenger, Instagram, and WhatsApp.",
+  icons: {
+    icon: "/icon.png",
+    shortcut: "/icon.png",
+    apple: "/icon.png",
+  },
 };
 
 export default function RootLayout({

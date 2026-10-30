@@ -7,6 +7,9 @@
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  mediaUrl?: string | null;
+  imageBase64?: string | null;
+  imageMimeType?: string | null;
 }
 
 export interface AIProviderConfig {
@@ -77,34 +80,80 @@ async function callGeminiApi(
   messages: ChatMessage[],
   options: AICompletionOptions
 ): Promise<AICompletionResponse> {
-  const primaryModel = options.model || "gemini-3.5-flash";
-  const candidateModels = [primaryModel, "gemini-flash-lite-latest", "gemini-flash-latest"];
+  const requestedModel = options.model || "gemini-3.5-flash-lite";
+  const candidateModels = [
+    requestedModel,
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+  ].filter((m, i, arr) => arr.indexOf(m) === i);
 
-  const contents = messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
+  const contents = await Promise.all(
+    messages
+      .filter((m) => m.role !== "system")
+      .map(async (m) => {
+        const parts: any[] = [];
 
-  const body: Record<string, any> = {
-    contents,
-    generationConfig: {
-      temperature: options.temperature ?? 0.3,
-      maxOutputTokens: options.maxTokens ?? 300,
-    },
-  };
+        if (m.imageBase64) {
+          parts.push({
+            inlineData: {
+              mimeType: m.imageMimeType || "image/jpeg",
+              data: m.imageBase64.replace(/^data:image\/[a-zA-Z]+;base64,/, ""),
+            },
+          });
+        } else if (m.mediaUrl && m.mediaUrl.startsWith("http")) {
+          try {
+            const imgRes = await fetch(m.mediaUrl);
+            if (imgRes.ok) {
+              const mime = imgRes.headers.get("content-type") || "image/jpeg";
+              const arrayBuf = await imgRes.arrayBuffer();
+              const b64 = Buffer.from(arrayBuf).toString("base64");
+              parts.push({
+                inlineData: {
+                  mimeType: mime,
+                  data: b64,
+                },
+              });
+            }
+          } catch (fetchImgErr) {
+            console.warn("[Gemini Provider] Failed to fetch image from mediaUrl:", fetchImgErr);
+          }
+        }
 
-  if (options.systemInstruction) {
-    body.systemInstruction = {
-      parts: [{ text: options.systemInstruction }],
-    };
-  }
+        parts.push({ text: m.content || "Please look at this product image and answer my inquiry." });
+
+        return {
+          role: m.role === "assistant" ? "model" : "user",
+          parts,
+        };
+      })
+  );
 
   let lastError: Error | null = null;
 
   for (const model of candidateModels) {
     try {
+      const genConfig: Record<string, any> = {
+        temperature: options.temperature ?? 0.6,
+        maxOutputTokens: options.maxTokens ?? 1000,
+      };
+
+      // Only reasoning models support thinkingConfig
+      if (model.includes("3.5-flash") && !model.includes("-lite")) {
+        genConfig.thinkingConfig = { thinkingBudget: 0 };
+      }
+
+      const body: Record<string, any> = {
+        contents,
+        generationConfig: genConfig,
+      };
+
+      if (options.systemInstruction) {
+        body.systemInstruction = {
+          parts: [{ text: options.systemInstruction }],
+        };
+      }
+
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: "POST",
@@ -120,7 +169,14 @@ async function callGeminiApi(
       }
 
       const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const text =
+        parts
+          .filter((p: any) => !p.thought && typeof p.text === "string")
+          .map((p: any) => p.text)
+          .join("") ||
+        parts[0]?.text ||
+        "";
       const promptTokens = data.usageMetadata?.promptTokenCount || 50;
       const completionTokens = data.usageMetadata?.candidatesTokenCount || 25;
 

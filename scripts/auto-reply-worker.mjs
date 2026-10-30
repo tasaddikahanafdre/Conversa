@@ -1,17 +1,38 @@
-async function runSync() {
+import fs from "fs";
+import path from "path";
+
+function syncLogoIfUpdated() {
   try {
-    const res = await fetch("http://localhost:3000/api/channels/facebook/sync", {
+    const rootLogo = path.join(process.cwd(), "logo", "logo.png");
+    const publicLogoDir = path.join(process.cwd(), "public", "logo");
+    const publicLogo = path.join(publicLogoDir, "logo.png");
+
+    if (fs.existsSync(rootLogo)) {
+      if (!fs.existsSync(publicLogoDir)) {
+        fs.mkdirSync(publicLogoDir, { recursive: true });
+      }
+      const rootStat = fs.statSync(rootLogo);
+      if (!fs.existsSync(publicLogo) || rootStat.mtimeMs > fs.statSync(publicLogo).mtimeMs) {
+        fs.copyFileSync(rootLogo, publicLogo);
+        console.log("[Worker] Synced new logo.png from /logo to /public/logo/logo.png");
+      }
+    }
+  } catch (err) {
+    // Ignore file sync errors
+  }
+}
+
+async function runSync() {
+  syncLogoIfUpdated();
+  try {
+    await fetch("http://localhost:3000/api/channels/facebook/sync", {
       method: "POST",
     });
-    const data = await res.json();
-    if (data.repliesSent > 0) {
-      console.log(`[Worker] Sent ${data.repliesSent} AI auto-replies to Messenger!`);
-    }
   } catch (err) {
     // Ignore transient network errors
   }
 }
 
-console.log("[Worker] Conversa Facebook Auto-Reply Sync Worker started (polling every 6s)...");
-setInterval(runSync, 6000);
+console.log("[Worker] Conversa Facebook Auto-Reply & Logo Sync Worker started...");
+setInterval(runSync, 15000);
 runSync();

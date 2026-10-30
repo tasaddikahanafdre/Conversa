@@ -31,9 +31,9 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // Fetch latest conversations from Facebook Graph API
+      // Fetch latest conversations from Facebook Graph API (including attachments for images)
       const res = await fetch(
-        `https://graph.facebook.com/v21.0/${channel.platform_id}/conversations?fields=id,snippet,updated_time,messages.limit(3){id,message,from,created_time}&access_token=${encodeURIComponent(
+        `https://graph.facebook.com/v21.0/${channel.platform_id}/conversations?fields=id,snippet,updated_time,messages.limit(3){id,message,from,created_time,attachments{image_data,mime_type}}&access_token=${encodeURIComponent(
           pageToken
         )}`
       );
@@ -49,10 +49,17 @@ export async function POST(request: NextRequest) {
         if (latestMsg.from?.id === channel.platform_id) continue;
 
         const customerId = latestMsg.from?.id;
-        const customerMsgText = latestMsg.message;
+        let customerMsgText = latestMsg.message || "";
         const customerMsgId = latestMsg.id;
+        const attachments = latestMsg.attachments?.data || [];
+        const imageAtt = attachments.find((a: any) => a.image_data || (a.mime_type && a.mime_type.startsWith("image")));
+        const mediaUrl = imageAtt?.image_data?.url || null;
 
-        if (!customerId || !customerMsgText) continue;
+        if (!customerMsgText && mediaUrl) {
+          customerMsgText = "[Photo]";
+        }
+
+        if (!customerId || (!customerMsgText && !mediaUrl)) continue;
 
         // Check if we already recorded or replied to this message ID
         const { data: existingMsg } = await adminClient
@@ -66,7 +73,7 @@ export async function POST(request: NextRequest) {
         // Find or create conversation
         let { data: conv } = await adminClient
           .from("conversations")
-          .select("id, ai_status")
+          .select("id, ai_status, contact_name")
           .eq("channel_id", channel.id)
           .eq("external_contact_id", customerId)
           .maybeSingle();
@@ -84,7 +91,7 @@ export async function POST(request: NextRequest) {
               last_message_preview: customerMsgText,
               last_message_at: new Date().toISOString(),
             })
-            .select("id, ai_status")
+            .select("id, ai_status, contact_name")
             .single();
           conv = newConv;
         }
@@ -96,24 +103,47 @@ export async function POST(request: NextRequest) {
           conversation_id: conv.id,
           sender_type: "customer",
           content: customerMsgText,
+          media_url: mediaUrl || null,
           external_msg_id: customerMsgId,
         });
+
+        // Try extracting confirmed order if customer provided name, phone & address
+        try {
+          const { tryExtractAndSaveOrder } = await import("@/lib/orders/extractor");
+          await tryExtractAndSaveOrder(adminClient, {
+            conversationId: conv.id,
+            workspaceId: channel.workspace_id,
+            contactName: conv.contact_name || latestMsg.from?.name || "Customer",
+            messageText: customerMsgText,
+          });
+        } catch (extractErr) {
+          console.warn("[Sync Order Extraction]", extractErr);
+        }
+
+        // Update conversation last message preview and time
+        await adminClient
+          .from("conversations")
+          .update({
+            last_message_preview: customerMsgText,
+            last_message_at: new Date().toISOString(),
+          })
+          .eq("id", conv.id);
 
         // Load knowledge base & products
         const { data: agent } = await adminClient
           .from("ai_agents")
-          .select("primary_language, tone, base_system_prompt")
+          .select("id, primary_language, tone, base_system_prompt, primary_model")
           .eq("workspace_id", channel.workspace_id)
           .maybeSingle();
 
         const { data: knowledgeList } = await adminClient
           .from("agent_knowledge")
           .select("category, title, content")
-          .eq("workspace_id", channel.workspace_id);
+          .eq("agent_id", agent?.id || "");
 
         const { data: productsList } = await adminClient
           .from("products")
-          .select("name, price_bdt, description, in_stock")
+          .select("title, price, stock_quantity, description, is_available, image_urls")
           .eq("workspace_id", channel.workspace_id);
 
         const knowledgeSummary = (knowledgeList || [])
@@ -121,40 +151,113 @@ export async function POST(request: NextRequest) {
           .join("\n");
 
         const productSummary = (productsList || [])
-          .map((p) => `- ${p.name}: ৳${p.price_bdt}. ${p.description || ""}`)
+          .map(
+            (p) =>
+              `- ${p.title}: ৳${p.price} (${p.is_available && p.stock_quantity > 0 ? "In Stock" : "Out of Stock"}). ${p.description || ""}${p.image_urls?.[0] ? ` [Photo: ${p.image_urls[0]}]` : ""}`
+          )
           .join("\n");
 
         const systemInstruction = `
-You are the AI customer care agent for "${channel.account_name}" in Bangladesh.
-Language: ${agent?.primary_language || "Bangla & English (Banglish)"}
-Tone: ${agent?.tone || "Friendly and polite"}
-Products: ${productSummary || "XO1 Auto Charge Separator price 699 BDT."}
-Policies: ${knowledgeSummary || "Inside Dhaka delivery 70 BDT, outside Dhaka 130 BDT."}
-Answer concisely in natural Bangla or English based on the customer message.
+You are the versatile, highly intelligent, and friendly AI customer assistant for "${channel.account_name}" on Facebook Messenger in Bangladesh.
+
+Capabilities & Universal Response Behavior:
+- You can converse freely and politely about ANYTHING: greetings, casual small talk, general knowledge, store products, prices, delivery, order taking, recommendations, or whatever the customer says.
+- Never refuse to chat or say "I can only answer shop questions". If the customer asks a general question, chit-chats, jokes, or asks for advice, respond warmly, wittily, and helpfully.
+- When customers ask about products, pricing, or orders, use the business details and product catalog below accurately.
+- Visual Image Recognition: When a customer sends a photo or image of an item, inspect the image visually and identify which product from our Available Products catalog it is. Confirm that we sell it, state its exact price in BDT (৳) and stock status, and politely ask if they want to place an order. If it is an item not in our catalog, politely clarify that we do not have that specific item and recommend our popular available products.
+- Language Rule: You MUST ALWAYS reply in Pure, Natural Bangla script (বাংলা ভাষা - বাংলা হরফে).
+  - Even if the customer writes in Banglish (English letters like "price koto?", "kemon acho?", "delivery koto?") or English or Bangla, you MUST ALWAYS respond in pure, polite, natural standard Bangla (বাংলা বর্ণমালা).
+  - NEVER reply in Banglish (English alphabets writing Bangla words like "Jee, amader...").
+  - Technical terms or product names can remain in clean English or Bangla as natural (e.g. XO1 Auto Charge Separator or ৳699), but all sentences, greetings, and explanations MUST be written in pure Bangla.
+  - Tone: Polite, warm, respectful, and engaging with friendly emojis (${agent?.tone || "Friendly and polite"}).
+- Plain Text Only: Never output markdown formatting like asterisks (**bold**), headers (###), or markdown bullets, as Facebook Messenger displays raw asterisks. Use standard line breaks and emojis.
+- Completeness: Always finish your thoughts and sentences completely. Keep responses concise and engaging (1 to 3 sentences typically, or longer if a detailed explanation is requested).
+
+Store Knowledge & Delivery Policies:
+${knowledgeSummary || "ঢাকার ভিতরে ডেলিভারি চার্জ ৳৭০ (১-২ দিন), ঢাকার বাইরে ৳১৩০ (২-৩ দিন)। ক্যাশ অন ডেলিভারি (COD) সুবিধা রয়েছে।"}
+
+Available Products:
+${productSummary || "XO1 Auto Charge Separator: ৳699 (Original product with auto-disconnect feature)."}
+
+${agent?.base_system_prompt || ""}
 `;
 
-        const aiResponse = await generateAiReply(
-          [{ role: "user", content: customerMsgText }],
-          { systemInstruction, temperature: 0.3 }
-        );
+        // Fetch recent conversation context for smooth multi-turn chats
+        const { data: recentMsgs } = await adminClient
+          .from("messages")
+          .select("sender_type, content, media_url")
+          .eq("conversation_id", conv.id)
+          .order("created_at", { ascending: false })
+          .limit(6);
 
-        if (aiResponse.text?.trim()) {
-          const sendRes = await sendMessengerMessage(pageToken, customerId, aiResponse.text.trim());
+        const chatHistory: ChatMessage[] = (recentMsgs || [])
+          .reverse()
+          .map((m) => {
+            let content = m.content;
+            if (m.sender_type === "customer" && (!content || content === "[Photo]")) {
+              content = "The customer sent a product photo or image. Please inspect it visually, identify the product from our catalog, quote its price in BDT (৳), and ask if they wish to place an order.";
+            }
+            return {
+              role: m.sender_type === "customer" ? "user" : "assistant",
+              content,
+              mediaUrl: m.media_url,
+            };
+          });
+
+        if (chatHistory.length === 0) {
+          chatHistory.push({
+            role: "user",
+            content:
+              customerMsgText !== "[Photo]"
+                ? customerMsgText
+                : "The customer sent a product photo or image. Please inspect it visually, identify the product from our catalog, quote its price in BDT (৳), and ask if they wish to place an order.",
+            mediaUrl,
+          });
+        }
+
+        // Generate AI reply with fallback guarantee
+        let replyText = "";
+        let tokensUsed = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+        let costBdt = 0;
+
+        try {
+          const aiResponse = await generateAiReply(chatHistory, {
+            model: agent?.primary_model || "gemini-3.5-flash-lite",
+            systemInstruction,
+            temperature: 0.6,
+            maxTokens: 800,
+          });
+          replyText = aiResponse.text?.trim() || "";
+          if (aiResponse.tokensUsed) tokensUsed = aiResponse.tokensUsed;
+          if (aiResponse.costBdt) costBdt = aiResponse.costBdt;
+        } catch (aiErr) {
+          console.error("[Sync AI Error]", aiErr);
+          replyText = "Hello! 😊 We received your message. How can we help you today with our products or orders?";
+        }
+
+        if (replyText) {
+          const sendRes = await sendMessengerMessage(pageToken, customerId, replyText);
           if (sendRes.success) {
             repliesSent++;
             await adminClient.from("messages").insert({
               conversation_id: conv.id,
               sender_type: "ai",
-              content: aiResponse.text.trim(),
+              content: replyText,
+              tokens_used: tokensUsed.totalTokens,
+              cost_bdt: costBdt,
               external_msg_id: sendRes.messageId || null,
             });
             await adminClient
               .from("conversations")
               .update({
-                last_message_preview: aiResponse.text.trim(),
+                last_message_preview: replyText,
                 last_message_at: new Date().toISOString(),
               })
               .eq("id", conv.id);
+
+            console.log(`[Sync Auto-Reply Success] Replied to customer ${customerId}: "${replyText}"`);
+          } else {
+            console.error(`[Sync Send Error]`, sendRes.error);
           }
         }
       }

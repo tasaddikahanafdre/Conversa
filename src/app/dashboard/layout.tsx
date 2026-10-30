@@ -77,18 +77,14 @@ export default function DashboardLayout({
     <div className="flex min-h-screen bg-slate-900 text-slate-100">
       {/* Sidebar for Desktop */}
       <aside className="hidden w-64 flex-col border-r border-slate-800 bg-slate-950 p-4 md:flex">
-        {/* Brand & Workspace */}
+        {/* Brand */}
         <div className="mb-6 px-2">
-          <Link href="/dashboard" className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-md shadow-blue-500/20">
-              <Bot className="h-5 w-5 text-white" />
-            </div>
-            <div className="min-w-0">
-              <span className="text-lg font-bold tracking-tight text-white block truncate">
-                Conversa<span className="text-blue-500">.</span>
-              </span>
-              <div className="text-[11px] text-slate-400 font-medium truncate">{workspaceName}</div>
-            </div>
+          <Link href="/dashboard" className="flex items-center h-9 group">
+            <img
+              src="/logo/logo.png"
+              alt="Conversa"
+              className="h-8 max-w-[200px] w-auto object-contain object-left"
+            />
           </Link>
         </div>
 
@@ -175,10 +171,7 @@ export default function DashboardLayout({
         {/* Mobile Navbar */}
         <header className="flex h-16 items-center justify-between border-b border-slate-800 bg-slate-950 px-4 md:hidden">
           <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-              <Bot className="h-4 w-4 text-white" />
-            </div>
-            <span className="font-bold text-white">Conversa</span>
+            <img src="/logo/logo.png" alt="Conversa" className="h-7 w-auto object-contain" />
           </Link>
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -193,7 +186,9 @@ export default function DashboardLayout({
           <div className="fixed inset-0 z-50 bg-slate-950/95 p-6 md:hidden flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-                <span className="font-bold text-white">Conversa Menu</span>
+                <div className="flex items-center gap-2">
+                  <img src="/logo/logo.png" alt="Conversa" className="h-6 w-auto object-contain" />
+                </div>
                 <button onClick={() => setMobileMenuOpen(false)}>
                   <X className="h-6 w-6 text-slate-400" />
                 </button>

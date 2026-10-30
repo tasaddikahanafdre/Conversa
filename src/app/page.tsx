@@ -27,12 +27,7 @@ export default function HomePage() {
       <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <Link href="/" className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-md shadow-blue-500/20">
-              <Bot className="h-5 w-5 text-white" />
-            </div>
-            <span className="text-xl font-bold tracking-tight text-white">
-              Conversa<span className="text-blue-500">.</span>
-            </span>
+            <img src="/logo/logo.png" alt="Conversa - Always online. Always on point." className="h-8 w-auto object-contain" />
           </Link>
 
           <nav className="hidden items-center gap-8 md:flex">

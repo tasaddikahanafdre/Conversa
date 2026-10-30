@@ -85,12 +85,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen flex-col justify-center bg-slate-950 px-6 py-12 text-white">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <Link href="/" className="inline-flex items-center gap-2.5">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 shadow-md shadow-blue-500/20">
-            <Bot className="h-6 w-6 text-white" />
-          </div>
-          <span className="text-2xl font-bold tracking-tight text-white">
-            Conversa<span className="text-blue-500">.</span>
-          </span>
+          <img src="/logo/logo.png" alt="Conversa Logo" className="h-10 w-auto object-contain mx-auto" />
         </Link>
         <h2 className="mt-6 text-2xl font-bold tracking-tight text-white">
           Welcome back to Conversa

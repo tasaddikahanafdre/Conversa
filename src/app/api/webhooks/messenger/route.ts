@@ -23,6 +23,18 @@ export async function GET(request: NextRequest) {
   return new Response("Forbidden: Invalid verification token", { status: 403 });
 }
 
+interface PendingMessageBatch {
+  pageId: string;
+  senderId: string;
+  texts: string[];
+  mediaUrls: string[];
+  messageIds: string[];
+  timer: NodeJS.Timeout;
+}
+
+// Global in-memory debounce map for rapid consecutive incoming events from Facebook
+const pendingBatches = new Map<string, PendingMessageBatch>();
+
 // POST: Meta Event Receiver & Auto-Reply Dispatcher
 export async function POST(request: NextRequest) {
   try {
@@ -57,23 +69,64 @@ export async function POST(request: NextRequest) {
           if (event.message?.is_echo) continue;
 
           const senderId = event.sender?.id;
-          const messageText = event.message?.text;
+          const text = event.message?.text?.trim() || "";
           const messageId = event.message?.mid;
+          const attachments = event.message?.attachments || [];
+          const imageAttachment = attachments.find((a: any) => a.type === "image");
+          const mediaUrl = imageAttachment?.payload?.url || null;
 
-          if (senderId && messageText) {
+          if (senderId && (text || mediaUrl)) {
+            const key = `${pageId}:${senderId}`;
+            let batch = pendingBatches.get(key);
+
+            if (batch) {
+              clearTimeout(batch.timer);
+              if (text && !batch.texts.includes(text)) {
+                batch.texts.push(text);
+              }
+              if (mediaUrl && !batch.mediaUrls.includes(mediaUrl)) {
+                batch.mediaUrls.push(mediaUrl);
+              }
+              if (messageId && !batch.messageIds.includes(messageId)) {
+                batch.messageIds.push(messageId);
+              }
+            } else {
+              batch = {
+                pageId,
+                senderId,
+                texts: text ? [text] : [],
+                mediaUrls: mediaUrl ? [mediaUrl] : [],
+                messageIds: messageId ? [messageId] : [],
+                timer: setTimeout(() => {}, 0),
+              };
+              pendingBatches.set(key, batch);
+            }
+
             console.log(
-              `[Meta Webhook] Incoming message on Page ${pageId} from ${senderId}: "${messageText}"`
+              `[Meta Webhook] Buffered message from ${senderId}: "${text}" (Media: ${mediaUrl ? "Yes" : "No"}). Total texts: ${batch.texts.length}, Total media: ${batch.mediaUrls.length}`
             );
 
-            // Execute auto-reply pipeline asynchronously
-            processIncomingMessage({
-              pageId,
-              senderId,
-              messageText,
-              messageId,
-            }).catch((err) =>
-              console.error("[Auto-Reply Pipeline Error]", err)
-            );
+            // Debounce for 2500ms so companion photo + text caption packets from Facebook merge cleanly into ONE turn
+            batch.timer = setTimeout(async () => {
+              const currentBatch = pendingBatches.get(key);
+              pendingBatches.delete(key);
+              if (!currentBatch) return;
+
+              const combinedText = currentBatch.texts.join(" ").trim();
+              const primaryMedia = currentBatch.mediaUrls[0] || null;
+              const primaryMid = currentBatch.messageIds[0];
+
+              processIncomingMessage({
+                pageId: currentBatch.pageId,
+                senderId: currentBatch.senderId,
+                messageText: combinedText,
+                messageId: primaryMid,
+                mediaUrl: primaryMedia,
+                allMessageIds: currentBatch.messageIds,
+              }).catch((err) =>
+                console.error("[Debounced Auto-Reply Pipeline Error]", err)
+              );
+            }, 2500);
           }
         }
       }
@@ -102,8 +155,10 @@ async function processIncomingMessage(params: {
   senderId: string;
   messageText: string;
   messageId?: string;
+  mediaUrl?: string | null;
+  allMessageIds?: string[];
 }) {
-  const { pageId, senderId, messageText, messageId } = params;
+  const { pageId, senderId, messageText, messageId, mediaUrl, allMessageIds } = params;
   const adminClient = createAdminClient();
 
   // 1. Find connected channel for this Facebook Page
@@ -139,7 +194,7 @@ async function processIncomingMessage(params: {
   // 3. Find or create conversation thread
   let { data: conv } = await adminClient
     .from("conversations")
-    .select("id, ai_status, workspace_id")
+    .select("id, ai_status, workspace_id, contact_name")
     .eq("channel_id", channel.id)
     .eq("external_contact_id", senderId)
     .maybeSingle();
@@ -157,7 +212,7 @@ async function processIncomingMessage(params: {
         last_message_preview: messageText,
         last_message_at: new Date().toISOString(),
       })
-      .select("id, ai_status, workspace_id")
+      .select("id, ai_status, workspace_id, contact_name")
       .single();
 
     if (convError || !newConv) {
@@ -167,13 +222,48 @@ async function processIncomingMessage(params: {
     conv = newConv;
   }
 
-  // 4. Save incoming customer message to database
+  // 4. Deduplication: Check if any of these incoming message IDs were already processed
+  const idsToCheck = (allMessageIds && allMessageIds.length > 0)
+    ? allMessageIds
+    : messageId ? [messageId] : [];
+
+  if (idsToCheck.length > 0) {
+    const { data: existing } = await adminClient
+      .from("messages")
+      .select("id")
+      .in("external_msg_id", idsToCheck)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing) {
+      console.log(`[Auto-Reply] Message batch already recorded in DB. Skipping duplicate processing.`);
+      return;
+    }
+  }
+
+  const customerContent = messageText.trim() || "[Photo]";
+
+  // Save incoming customer message to database
   await adminClient.from("messages").insert({
     conversation_id: conv.id,
     sender_type: "customer",
-    content: messageText,
-    external_msg_id: messageId || null,
+    content: customerContent,
+    media_url: mediaUrl || null,
+    external_msg_id: messageId || (idsToCheck[0] ?? null),
   });
+
+  // Try extracting confirmed order if customer provided name, phone & address
+  try {
+    const { tryExtractAndSaveOrder } = await import("@/lib/orders/extractor");
+    await tryExtractAndSaveOrder(adminClient, {
+      conversationId: conv.id,
+      workspaceId: channel.workspace_id,
+      contactName: conv.contact_name || "Customer",
+      messageText: messageText.trim() || customerContent,
+    });
+  } catch (extractErr) {
+    console.warn("[Auto-Reply Order Extraction]", extractErr);
+  }
 
   // 5. If conversation is paused by merchant for human takeover, do NOT auto-reply
   if (conv.ai_status === "paused" || conv.ai_status === "disabled") {
@@ -184,18 +274,18 @@ async function processIncomingMessage(params: {
   // 6. Load AI Agent settings, Knowledge Base items, and Product Catalog
   const { data: agent } = await adminClient
     .from("ai_agents")
-    .select("name, primary_language, tone, base_system_prompt")
+    .select("id, name, primary_language, tone, base_system_prompt, primary_model")
     .eq("workspace_id", channel.workspace_id)
     .maybeSingle();
 
   const { data: knowledgeList } = await adminClient
     .from("agent_knowledge")
     .select("category, title, content")
-    .eq("workspace_id", channel.workspace_id);
+    .eq("agent_id", agent?.id || "");
 
   const { data: productsList } = await adminClient
     .from("products")
-    .select("name, price_bdt, description, in_stock")
+    .select("title, price, stock_quantity, description, is_available, image_urls")
     .eq("workspace_id", channel.workspace_id);
 
   // 7. Compile prompt context
@@ -206,71 +296,111 @@ async function processIncomingMessage(params: {
   const productSummary = (productsList || [])
     .map(
       (p) =>
-        `- ${p.name}: ৳${p.price_bdt} (${p.in_stock ? "In Stock" : "Out of Stock"}). ${p.description || ""}`
+        `- ${p.title}: ৳${p.price} (${p.is_available && p.stock_quantity > 0 ? "In Stock" : "Out of Stock"}). ${p.description || ""}${p.image_urls?.[0] ? ` [Photo: ${p.image_urls[0]}]` : ""}`
     )
     .join("\n");
 
   const systemInstruction = `
-You are the official AI customer care representative for "${channel.account_name}" in Bangladesh.
-Your goal is to assist customers politely, answer product inquiries, quote delivery charges, and help capture orders.
+You are the versatile, highly intelligent, and friendly AI customer assistant for "${channel.account_name}" on Facebook Messenger in Bangladesh.
 
-Language & Tone Guidelines:
-- Primary Language: ${agent?.primary_language || "Bangla & English (Banglish)"}
-- Tone: ${agent?.tone || "Friendly, helpful, and polite"}
-- If the customer writes in Bangla, reply in natural, polite Bangla.
-- If the customer writes in English or Banglish (e.g. "Price koto?", "Delivery koto?"), reply naturally in the same style.
-- Be concise: Keep replies under 2 to 3 sentences suitable for Facebook Messenger.
+Capabilities & Universal Response Behavior:
+- You can converse freely and politely about ANYTHING: greetings, casual small talk, general knowledge, store products, prices, delivery, order taking, recommendations, or whatever the customer says.
+- Never refuse to chat or say "I can only answer shop questions". If the customer asks a general question, chit-chats, jokes, or asks for advice, respond warmly, wittily, and helpfully.
+- When customers ask about products, pricing, or orders, use the business details and product catalog below accurately.
+- Visual Image Recognition: When a customer sends a photo or image of an item, inspect the image visually and identify which product from our Available Products catalog it is. Confirm that we sell it, state its exact price in BDT (৳) and stock status, and politely ask if they want to place an order. If it is an item not in our catalog, politely clarify that we do not have that specific item and recommend our popular available products.
+- Language Rule: You MUST ALWAYS reply in Pure, Natural Bangla script (বাংলা ভাষা - বাংলা হরফে).
+  - Even if the customer writes in Banglish (English letters like "price koto?", "kemon acho?", "delivery koto?") or English or Bangla, you MUST ALWAYS respond in pure, polite, natural standard Bangla (বাংলা বর্ণমালা).
+  - NEVER reply in Banglish (English alphabets writing Bangla words like "Jee, amader...").
+  - Technical terms or product names can remain in clean English or Bangla as natural (e.g. XO1 Auto Charge Separator or ৳699), but all sentences, greetings, and explanations MUST be written in pure Bangla.
+  - Tone: Polite, warm, respectful, and engaging with friendly emojis (${agent?.tone || "Friendly and polite"}).
+- Plain Text Only: Never output markdown formatting like asterisks (**bold**), headers (###), or markdown bullets, as Facebook Messenger displays raw asterisks. Use standard line breaks and emojis.
+- Completeness: Always finish your thoughts and sentences completely. Keep responses concise and engaging (1 to 3 sentences typically, or longer if a detailed explanation is requested).
 
-Business Knowledge Base:
-${knowledgeSummary || "Standard delivery inside Dhaka: ৳70 (1-2 days). Outside Dhaka: ৳130 (2-3 days). Cash on delivery available."}
+Store Knowledge & Delivery Policies:
+${knowledgeSummary || "ঢাকার ভিতরে ডেলিভারি চার্জ ৳৭০ (১-২ দিন), ঢাকার বাইরে ৳১৩০ (২-৩ দিন)। ক্যাশ অন ডেলিভারি (COD) সুবিধা রয়েছে।"}
 
 Available Products:
-${productSummary || "Various lifestyle and retail products."}
+${productSummary || "XO1 Auto Charge Separator: ৳699 (Original product with auto-disconnect feature)."}
 
 ${agent?.base_system_prompt || ""}
 `;
 
-  // 8. Fetch last 5 messages for conversation context
+  // 8. Fetch last 6 messages for conversation context
   const { data: recentMsgs } = await adminClient
     .from("messages")
-    .select("sender_type, content")
+    .select("sender_type, content, media_url")
     .eq("conversation_id", conv.id)
     .order("created_at", { ascending: false })
-    .limit(5);
+    .limit(6);
 
   const chatHistory: ChatMessage[] = (recentMsgs || [])
     .reverse()
-    .map((m) => ({
-      role: m.sender_type === "customer" ? "user" : "assistant",
-      content: m.content,
-    }));
+    .map((m) => {
+      let content = m.content;
+      if (m.sender_type === "customer" && (!content || content === "[Photo]")) {
+        content = "The customer sent a product photo or image. Please inspect it visually and identify the product from our catalog, quote its price in BDT (৳), and ask if they wish to place an order.";
+      }
+      return {
+        role: m.sender_type === "customer" ? "user" : "assistant",
+        content,
+        mediaUrl: m.media_url,
+      };
+    });
 
   if (chatHistory.length === 0) {
-    chatHistory.push({ role: "user", content: messageText });
+    chatHistory.push({
+      role: "user",
+      content:
+        messageText.trim() ||
+        "The customer sent a product photo or image. Please inspect it visually and identify the product from our catalog, quote its price in BDT (৳), and ask if they wish to place an order.",
+      mediaUrl,
+    });
   }
 
-  // 9. Generate AI response using Gemini AI
-  const aiResponse = await generateAiReply(chatHistory, {
-    systemInstruction,
-    temperature: 0.3,
-    maxTokens: 250,
-  });
+  // 9. Generate AI response using Gemini AI with fallback guarantee
+  let replyText = "";
+  let tokensUsed = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let costBdt = 0;
 
-  const replyText = aiResponse.text?.trim();
+  try {
+    const aiResponse = await generateAiReply(chatHistory, {
+      model: agent?.primary_model || "gemini-3.5-flash-lite",
+      systemInstruction,
+      temperature: 0.6,
+      maxTokens: 800,
+    });
+    replyText = aiResponse.text?.trim() || "";
+    if (aiResponse.tokensUsed) tokensUsed = aiResponse.tokensUsed;
+    if (aiResponse.costBdt) costBdt = aiResponse.costBdt;
+  } catch (aiErr) {
+    console.error("[Auto-Reply AI Error] Failed to generate AI reply:", aiErr);
+    // Reliable, friendly fallback in case of API outage or rate limits
+    replyText = "Hello! 😊 We received your message. How can we help you today with our products or orders?";
+  }
+
   if (!replyText) {
-    console.warn("[Auto-Reply] AI returned empty response.");
-    return;
+    replyText = "Hello! 😊 We received your message. How can we help you today?";
   }
 
-  // 10. Send reply back to customer on Facebook Messenger
-  const sendResult = await sendMessengerMessage(
+  // 10. Send reply back to customer on Facebook Messenger with retry
+  let sendResult = await sendMessengerMessage(
     pageAccessToken,
     senderId,
     replyText
   );
 
   if (!sendResult.success) {
-    console.error("[Auto-Reply] Failed to send via Meta Send API:", sendResult.error);
+    console.warn("[Auto-Reply Send Attempt 1 Failed] Retrying in 1.5s...", sendResult.error);
+    await new Promise((res) => setTimeout(res, 1500));
+    sendResult = await sendMessengerMessage(
+      pageAccessToken,
+      senderId,
+      replyText
+    );
+  }
+
+  if (!sendResult.success) {
+    console.error("[Auto-Reply Critical Error] Failed to send via Meta Send API after retry:", sendResult.error);
     return;
   }
 
@@ -279,8 +409,8 @@ ${agent?.base_system_prompt || ""}
     conversation_id: conv.id,
     sender_type: "ai",
     content: replyText,
-    tokens_used: aiResponse.tokensUsed?.totalTokens || 0,
-    cost_bdt: aiResponse.costBdt || 0,
+    tokens_used: tokensUsed.totalTokens,
+    cost_bdt: costBdt,
     external_msg_id: sendResult.messageId || null,
   });
 

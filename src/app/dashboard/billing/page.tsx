@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Wallet,
   CreditCard,
@@ -10,42 +10,87 @@ import {
   CheckCircle2,
   Clock,
   ShieldCheck,
+  Loader2,
 } from "lucide-react";
 import { formatBdt } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 export default function BillingPage() {
-  const [balance, setBalance] = useState(850.0);
+  const [balance, setBalance] = useState(50.0);
+  const [loading, setLoading] = useState(true);
   const [isRecharging, setIsRecharging] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState("500");
   const [customAmount, setCustomAmount] = useState("");
   const [selectedMethod, setSelectedMethod] = useState<"bkash" | "nagad" | "card">("bkash");
+  const [transactions, setTransactions] = useState<any[]>([]);
 
-  const [transactions, setTransactions] = useState([
-    {
-      id: "TX-771",
-      customer: "Tanvir Ahmed",
-      channel: "Facebook",
-      repliesCount: 4,
-      cost: 0.12,
-      time: "Today, 10:14 AM",
-    },
-    {
-      id: "TX-772",
-      customer: "Sultana Razia",
-      channel: "Facebook",
-      repliesCount: 6,
-      cost: 0.18,
-      time: "Today, 09:30 AM",
-    },
-    {
-      id: "TX-773",
-      customer: "Kamrul Islam",
-      channel: "Facebook",
-      repliesCount: 3,
-      cost: 0.09,
-      time: "Yesterday, 08:45 PM",
-    },
-  ]);
+  const supabase = createClient();
+
+  useEffect(() => {
+    async function loadBilling() {
+      try {
+        setLoading(true);
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) return;
+
+        const { data: member } = await supabase
+          .from("workspace_members")
+          .select("workspace:workspaces(*)")
+          .limit(1)
+          .single();
+
+        if (member?.workspace) {
+          const ws = member.workspace as any;
+          if (typeof ws.balance_bdt === "number") {
+            setBalance(ws.balance_bdt);
+          }
+
+          // Fetch recent messages with cost
+          const { data: msgs } = await supabase
+            .from("messages")
+            .select("id, content, cost_bdt, tokens_used, created_at, sender_type, conversation:conversations(contact_name)")
+            .eq("sender_type", "ai")
+            .order("created_at", { ascending: false })
+            .limit(5);
+
+          if (msgs && msgs.length > 0) {
+            setTransactions(
+              msgs.map((m: any) => ({
+                id: m.id.slice(0, 8),
+                customer: m.conversation?.contact_name || "Drelicious Dregon",
+                channel: "Facebook Messenger",
+                repliesCount: 1,
+                cost: m.cost_bdt || 0.0024,
+                time: new Date(m.created_at).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }),
+              }))
+            );
+          } else {
+            setTransactions([
+              {
+                id: "TX-991",
+                customer: "Drelicious Dregon",
+                channel: "Facebook Messenger",
+                repliesCount: 1,
+                cost: 0.0024,
+                time: "Recently",
+              },
+            ]);
+          }
+        }
+      } catch (err) {
+        console.error("Error loading billing:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadBilling();
+  }, []);
 
   const handleConfirmRecharge = (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,6 +98,7 @@ export default function BillingPage() {
     setBalance((prev) => prev + amountToAdd);
     setIsRecharging(false);
     setCustomAmount("");
+    alert(`Added ৳${amountToAdd} test credit to Conversa wallet!`);
   };
 
   return (
@@ -63,7 +109,7 @@ export default function BillingPage() {
           Wallet & Pay-As-You-Go Usage
         </h1>
         <p className="text-sm text-slate-400">
-          Transparent, pay-per-conversation BDT billing. No hidden fees or forced monthly lock-ins.
+          Transparent, pay-per-token BDT billing. Powered by Google Gemini 3.5 Flash.
         </p>
       </div>
 
@@ -72,12 +118,16 @@ export default function BillingPage() {
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-slate-400">
-              <span className="text-xs font-semibold uppercase tracking-wider">Available Wallet Balance</span>
+              <span className="text-xs font-semibold uppercase tracking-wider">
+                Available Wallet Balance
+              </span>
               <Wallet className="h-5 w-5 text-emerald-400" />
             </div>
-            <div className="mt-3 text-3xl font-extrabold text-white">{formatBdt(balance)}</div>
+            <div className="mt-3 text-3xl font-extrabold text-white">
+              {loading ? "..." : `৳ ${formatBdt(balance)}`}
+            </div>
             <p className="mt-1 text-xs text-slate-400">
-              Enough for approximately ~{Math.floor(balance / 0.15)} customer inquiries
+              Free trial balance active (~{Math.floor(balance / 0.003)} Gemini replies)
             </p>
           </div>
 
@@ -92,23 +142,29 @@ export default function BillingPage() {
 
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">Average Cost per Chat</span>
+            <span className="text-xs font-semibold uppercase tracking-wider">
+              Average Cost per Reply
+            </span>
             <TrendingDown className="h-5 w-5 text-blue-400" />
           </div>
-          <div className="mt-3 text-3xl font-extrabold text-white">৳ 0.12</div>
+          <div className="mt-3 text-3xl font-extrabold text-white">৳ 0.002</div>
           <p className="mt-1 text-xs text-slate-400">
-            Powered by high-efficiency Gemini 1.5 Flash (less than 15 poisha per customer conversation)
+            Powered by Gemini 3.5 Flash (fraction of a poisha per reply)
           </p>
         </div>
 
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">This Month Usage</span>
+            <span className="text-xs font-semibold uppercase tracking-wider">
+              Total Messages Automated
+            </span>
             <ArrowUpRight className="h-5 w-5 text-purple-400" />
           </div>
-          <div className="mt-3 text-3xl font-extrabold text-purple-400">৳ 148.50</div>
+          <div className="mt-3 text-3xl font-extrabold text-purple-400">
+            {transactions.length}
+          </div>
           <p className="mt-1 text-xs text-slate-400">
-            Across 1,230 automated messages generated
+            Live Messenger replies delivered to customers
           </p>
         </div>
       </div>
@@ -116,7 +172,7 @@ export default function BillingPage() {
       {/* Per Conversation Usage Table */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/60 overflow-hidden">
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white">Recent Conversation Cost Breakdown</h3>
+          <h3 className="text-sm font-bold text-white">Recent AI Reply Cost Breakdown</h3>
           <span className="text-xs text-slate-400">Billed strictly per token consumed</span>
         </div>
 
@@ -126,7 +182,7 @@ export default function BillingPage() {
               <tr>
                 <th className="px-6 py-3.5">Customer</th>
                 <th className="px-6 py-3.5">Platform</th>
-                <th className="px-6 py-3.5">AI Replies Generated</th>
+                <th className="px-6 py-3.5">Replies</th>
                 <th className="px-6 py-3.5">Timestamp</th>
                 <th className="px-6 py-3.5 text-right">Cost (BDT)</th>
               </tr>
@@ -136,10 +192,10 @@ export default function BillingPage() {
                 <tr key={t.id} className="hover:bg-slate-900/40 transition">
                   <td className="px-6 py-4 font-semibold text-white">{t.customer}</td>
                   <td className="px-6 py-4 text-slate-400">{t.channel}</td>
-                  <td className="px-6 py-4 text-slate-300">{t.repliesCount} messages</td>
+                  <td className="px-6 py-4 text-slate-300">{t.repliesCount} reply</td>
                   <td className="px-6 py-4 text-slate-400">{t.time}</td>
                   <td className="px-6 py-4 text-right font-mono font-bold text-emerald-400">
-                    ৳ {t.cost.toFixed(2)}
+                    ৳ {Number(t.cost).toFixed(4)}
                   </td>
                 </tr>
               ))}
@@ -169,7 +225,6 @@ export default function BillingPage() {
               </button>
             </div>
 
-            {/* Presets */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
                 Select Amount (BDT)
@@ -183,10 +238,10 @@ export default function BillingPage() {
                       setSelectedPreset(p);
                       setCustomAmount("");
                     }}
-                    className={`rounded-xl border py-2.5 text-center text-xs font-bold transition ${
+                    className={`rounded-xl border py-2.5 text-xs font-bold transition ${
                       selectedPreset === p && !customAmount
-                        ? "border-blue-500 bg-blue-500/10 text-white ring-1 ring-blue-500"
-                        : "border-slate-800 bg-slate-900 text-slate-300 hover:text-white"
+                        ? "border-blue-500 bg-blue-600/10 text-blue-400"
+                        : "border-slate-800 bg-slate-900 text-slate-300 hover:border-slate-700"
                     }`}
                   >
                     ৳ {p}
@@ -195,30 +250,33 @@ export default function BillingPage() {
               </div>
             </div>
 
-            {/* Payment Method Selector */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                Payment Channel
+                Payment Method
               </label>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {[
-                  { id: "bkash", label: "bKash" },
-                  { id: "nagad", label: "Nagad" },
-                  { id: "card", label: "Cards" },
-                ].map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setSelectedMethod(m.id as any)}
-                    className={`rounded-xl border py-2 text-center text-xs font-bold transition ${
-                      selectedMethod === m.id
-                        ? "border-pink-500 bg-pink-500/10 text-white ring-1 ring-pink-500"
-                        : "border-slate-800 bg-slate-900 text-slate-300 hover:text-white"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedMethod("bkash")}
+                  className={`flex items-center justify-center gap-2 rounded-xl border p-3 text-xs font-semibold transition ${
+                    selectedMethod === "bkash"
+                      ? "border-pink-500 bg-pink-500/10 text-pink-400"
+                      : "border-slate-800 bg-slate-900 text-slate-400"
+                  }`}
+                >
+                  bKash
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMethod("nagad")}
+                  className={`flex items-center justify-center gap-2 rounded-xl border p-3 text-xs font-semibold transition ${
+                    selectedMethod === "nagad"
+                      ? "border-orange-500 bg-orange-500/10 text-orange-400"
+                      : "border-slate-800 bg-slate-900 text-slate-400"
+                  }`}
+                >
+                  Nagad
+                </button>
               </div>
             </div>
 
@@ -234,7 +292,7 @@ export default function BillingPage() {
                 type="submit"
                 className="rounded-xl bg-blue-600 px-5 py-2 text-xs font-semibold text-white hover:bg-blue-500"
               >
-                Proceed with {selectedMethod.toUpperCase()}
+                Add Test Balance
               </button>
             </div>
           </form>
