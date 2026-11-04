@@ -310,3 +310,50 @@ export async function sendMessengerMessage(
     return { success: false, error: msg };
   }
 }
+
+/**
+ * Sends a native media attachment (image, audio, video, file) to a customer via the Meta Messenger Send API.
+ * For images, setting type = "image" instructs Facebook Messenger to render it as a native inline photo
+ * in the conversation rather than a downloadable document/file attachment.
+ * Reference: https://developers.facebook.com/docs/messenger-platform/reference/send-api
+ */
+export async function sendMessengerAttachment(
+  pageAccessToken: string,
+  recipientId: string,
+  attachmentUrl: string,
+  type: "image" | "file" | "audio" | "video" = "image"
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const version = getMetaGraphApiVersion();
+  const url = `https://graph.facebook.com/${version}/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient: { id: recipientId },
+        message: {
+          attachment: {
+            type,
+            payload: {
+              url: attachmentUrl,
+              is_reusable: true,
+            },
+          },
+        },
+        messaging_type: "RESPONSE",
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      console.error("[Meta Send Attachment API Error]", data.error);
+      return { success: false, error: data.error?.message || "Failed to send attachment" };
+    }
+
+    return { success: true, messageId: data.message_id };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Network error sending attachment";
+    return { success: false, error: msg };
+  }
+}

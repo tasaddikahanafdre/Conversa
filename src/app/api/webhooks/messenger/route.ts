@@ -2,8 +2,9 @@ import { after, NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptToken } from "@/lib/security/encryption";
-import { sendMessengerMessage } from "@/lib/meta/client";
+import { sendMessengerMessage, sendMessengerAttachment } from "@/lib/meta/client";
 import { generateAiReply, ChatMessage } from "@/lib/ai/provider";
+import { findRequestedProductImage, sanitizeAiReplyText } from "@/lib/products/image-delivery";
 
 export const maxDuration = 60; // Allow background execution up to 60s for AI and Meta APIs
 
@@ -279,7 +280,7 @@ async function processIncomingMessage(params: {
   const productSummary = (productsList || [])
     .map(
       (p) =>
-        `- ${p.title}: ৳${p.price} (${p.is_available && p.stock_quantity > 0 ? "In Stock" : "Out of Stock"}). ${p.description || ""}${p.image_urls?.[0] ? ` [Photo: ${p.image_urls[0]}]` : ""}`
+        `- ${p.title}: ৳${p.price} (${p.is_available && p.stock_quantity > 0 ? "In Stock" : "Out of Stock"}). ${p.description || ""}${p.image_urls?.[0] ? " [Has Photo Available]" : ""}`
     )
     .join("\n");
 
@@ -291,6 +292,7 @@ Capabilities & Universal Response Behavior:
 - Never refuse to chat or say "I can only answer shop questions". If the customer asks a general question, chit-chats, jokes, or asks for advice, respond warmly, wittily, and helpfully.
 - When customers ask about products, pricing, or orders, use the business details and product catalog below accurately.
 - Visual Image Recognition: When a customer sends a photo or image of an item, inspect the image visually and identify which product from our Available Products catalog it is. Confirm that we sell it, state its exact price in BDT (৳) and stock status, and politely ask if they want to place an order. If it is an item not in our catalog, politely clarify that we do not have that specific item and recommend our popular available products.
+- Product Picture Delivery: When a customer asks for product pictures, samples, or to see a product, describe the product warmly and confirm that you are sending the picture right now. Do NOT output raw image links or URLs in your text message, because our system automatically attaches the high-resolution photo directly into the Messenger conversation. If the customer asks for a picture without specifying which product, politely ask which product they would like to see.
 - Language Rule: You MUST ALWAYS reply in Pure, Natural Bangla script (বাংলা ভাষা - বাংলা হরফে).
   - Even if the customer writes in Banglish (English letters like "price koto?", "kemon acho?", "delivery koto?") or English or Bangla, you MUST ALWAYS respond in pure, polite, natural standard Bangla (বাংলা বর্ণমালা).
   - NEVER reply in Banglish (English alphabets writing Bangla words like "Jee, amader...").
@@ -333,7 +335,20 @@ ${agent?.base_system_prompt || ""}
     });
   }
 
-  // 9. Generate AI response using Gemini AI with fallback guarantee
+  // 9. Check if customer is asking for product pictures & match exact existing image
+  const imageDelivery = findRequestedProductImage({
+    currentMessage: messageText,
+    chatHistory,
+    products: productsList || [],
+  });
+
+  if (imageDelivery.isPictureRequest) {
+    console.log(
+      `[Auto-Reply Image Delivery] Product: ${imageDelivery.product?.title || "None"} (Ambiguous: ${imageDelivery.isAmbiguous}, Image: ${imageDelivery.imageUrl ? "Found" : "None"})`
+    );
+  }
+
+  // 10. Generate AI response using Gemini AI with fallback guarantee
   let replyText = "";
   let tokensUsed = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   let costBdt = 0;
@@ -358,11 +373,14 @@ ${agent?.base_system_prompt || ""}
     replyText = "Hello! 😊 We received your message. How can we help you today?";
   }
 
-  // 10. Send reply back to customer on Facebook Messenger with retry
+  // Sanitize reply text to remove any raw image URLs so Messenger doesn't render file cards
+  const cleanReplyText = sanitizeAiReplyText(replyText);
+
+  // 11. Send text reply back to customer on Facebook Messenger with retry
   let sendResult = await sendMessengerMessage(
     pageAccessToken,
     senderId,
-    replyText
+    cleanReplyText
   );
 
   if (!sendResult.success) {
@@ -371,7 +389,7 @@ ${agent?.base_system_prompt || ""}
     sendResult = await sendMessengerMessage(
       pageAccessToken,
       senderId,
-      replyText
+      cleanReplyText
     );
   }
 
@@ -380,25 +398,46 @@ ${agent?.base_system_prompt || ""}
     return;
   }
 
-  // 11. Save AI reply in database
+  // 12. If customer requested product picture and image exists, send as native Messenger image attachment
+  // Setting type="image" ensures Facebook Messenger renders it as an inline photo instead of a downloadable file/document
+  if (imageDelivery.imageUrl) {
+    try {
+      const attachRes = await sendMessengerAttachment(
+        pageAccessToken,
+        senderId,
+        imageDelivery.imageUrl,
+        "image"
+      );
+      if (attachRes.success) {
+        console.log(`[Auto-Reply Image Success] Sent native image attachment for ${imageDelivery.product?.title}`);
+      } else {
+        console.warn(`[Auto-Reply Image Warning] Failed to send attachment:`, attachRes.error);
+      }
+    } catch (attachErr) {
+      console.error("[Auto-Reply Attachment Error]", attachErr);
+    }
+  }
+
+  // 13. Save AI reply in database (with media_url if image was delivered)
   await adminClient.from("messages").insert({
     conversation_id: conv.id,
     sender_type: "ai",
-    content: replyText,
+    content: cleanReplyText,
+    media_url: imageDelivery.imageUrl || null,
     tokens_used: tokensUsed.totalTokens,
     cost_bdt: costBdt,
     external_msg_id: sendResult.messageId || null,
   });
 
-  // 12. Update conversation preview
+  // 14. Update conversation preview
   await adminClient
     .from("conversations")
     .update({
-      last_message_preview: replyText,
+      last_message_preview: cleanReplyText,
       last_message_at: new Date().toISOString(),
       unread_count: 0,
     })
     .eq("id", conv.id);
 
-  console.log(`[Auto-Reply Success] Replied to customer ${senderId}: "${replyText}"`);
+  console.log(`[Auto-Reply Success] Replied to customer ${senderId}: "${cleanReplyText}"`);
 }

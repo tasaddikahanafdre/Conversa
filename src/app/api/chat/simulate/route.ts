@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateAiReply } from "@/lib/ai/provider";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { findRequestedProductImage, sanitizeAiReplyText } from "@/lib/products/image-delivery";
 
 export async function POST(request: NextRequest) {
   try {
@@ -78,7 +79,7 @@ export async function POST(request: NextRequest) {
     const productSummary = (productsList || [])
       .map(
         (p) =>
-          `- ${p.title}: ৳${p.price} (${p.is_available && p.stock_quantity > 0 ? "In Stock" : "Out of Stock"}). ${p.description || ""}${p.image_urls?.[0] ? ` [Photo: ${p.image_urls[0]}]` : ""}`
+          `- ${p.title}: ৳${p.price} (${p.is_available && p.stock_quantity > 0 ? "In Stock" : "Out of Stock"}). ${p.description || ""}${p.image_urls?.[0] ? " [Has Photo Available]" : ""}`
       )
       .join("\n");
 
@@ -90,6 +91,7 @@ Capabilities & Universal Response Behavior:
 - Never refuse to chat or say "I can only answer shop questions". If the customer asks a general question, chit-chats, jokes, or asks for advice, respond warmly, wittily, and helpfully.
 - When customers ask about products, pricing, or orders, use the business details and product catalog below accurately.
 - Visual Image Recognition: When a customer sends a photo or image of an item, inspect the image visually and identify which product from our Available Products catalog it is (e.g. Magical Garage Key Hanger with LED Mini Car Display, XO1 Auto Charge Separator, etc.). Confirm that we sell it, state its exact price in BDT (৳) and stock status, and politely ask if they want to place an order. If it is an item not in our catalog, politely clarify that we do not have that specific item and recommend our popular available products.
+- Product Picture Delivery: When a customer asks for product pictures, samples, or to see a product, describe the product warmly and confirm that you are sending the picture right now. Do NOT output raw image links or URLs in your text message, because our system automatically attaches the high-resolution photo directly into the Messenger conversation. If the customer asks for a picture without specifying which product, politely ask which product they would like to see.
 - Language Rule: You MUST ALWAYS reply in Pure, Natural Bangla script (বাংলা ভাষা - বাংলা হরফে).
   - Even if the customer writes in Banglish (English letters like "price koto?", "kemon acho?", "delivery koto?") or English or Bangla, you MUST ALWAYS respond in pure, polite, natural standard Bangla (বাংলা বর্ণমালা).
   - NEVER reply in Banglish (English alphabets writing Bangla words like "Jee, amader...").
@@ -122,7 +124,20 @@ ${agent?.base_system_prompt || ""}
       maxTokens: 800,
     });
 
-    return NextResponse.json(result);
+    const lastUserMsg = [...formattedMessages].reverse().find((m) => m.role === "user");
+    const imageDelivery = findRequestedProductImage({
+      currentMessage: lastUserMsg?.content || "",
+      chatHistory: formattedMessages,
+      products: productsList || [],
+    });
+
+    const cleanText = sanitizeAiReplyText(result.text || "");
+
+    return NextResponse.json({
+      ...result,
+      text: cleanText,
+      mediaUrl: imageDelivery.imageUrl || null,
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to simulate AI reply";
     return NextResponse.json({ error: message }, { status: 500 });
