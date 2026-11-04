@@ -16,6 +16,9 @@ import {
   Upload,
   X,
   Image as ImageIcon,
+  Star,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { formatBdt } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -49,7 +52,8 @@ export default function ProductsPage() {
   const [newPrice, setNewPrice] = useState("");
   const [newStock, setNewStock] = useState("");
   const [newDesc, setNewDesc] = useState("");
-  const [newImageUrl, setNewImageUrl] = useState("");
+  const [newImageUrls, setNewImageUrls] = useState<string[]>([]);
+  const [customAddUrl, setCustomAddUrl] = useState("");
   const [uploadingAddImage, setUploadingAddImage] = useState(false);
   const addFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -60,7 +64,8 @@ export default function ProductsPage() {
   const [editPrice, setEditPrice] = useState("");
   const [editStock, setEditStock] = useState("");
   const [editDesc, setEditDesc] = useState("");
-  const [editImageUrl, setEditImageUrl] = useState("");
+  const [editImageUrls, setEditImageUrls] = useState<string[]>([]);
+  const [customEditUrl, setCustomEditUrl] = useState("");
   const [editIsAvailable, setEditIsAvailable] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [uploadingEditImage, setUploadingEditImage] = useState(false);
@@ -102,18 +107,20 @@ export default function ProductsPage() {
     }
   }
 
-  // Handle Image Upload to /api/upload
-  const handleUploadImageFile = async (
-    file: File,
+  // Handle Multi-file Uploads to /api/upload
+  const handleUploadImageFiles = async (
+    files: FileList | File[],
     type: "add" | "edit"
   ) => {
-    if (!file) return;
+    if (!files || files.length === 0) return;
     try {
       if (type === "add") setUploadingAddImage(true);
       else setUploadingEditImage(true);
 
       const formData = new FormData();
-      formData.append("file", file);
+      for (let i = 0; i < files.length; i++) {
+        formData.append("files", files[i]);
+      }
 
       const res = await fetch("/api/upload", {
         method: "POST",
@@ -121,20 +128,89 @@ export default function ProductsPage() {
       });
 
       const data = await res.json();
-      if (!res.ok || !data.url) {
+      if (!res.ok || (!data.urls && !data.url)) {
         throw new Error(data.error || "Image upload failed");
       }
 
+      const uploaded: string[] = Array.isArray(data.urls)
+        ? data.urls
+        : data.url
+        ? [data.url]
+        : [];
+
       if (type === "add") {
-        setNewImageUrl(data.url);
+        setNewImageUrls((prev) => [...prev, ...uploaded]);
       } else {
-        setEditImageUrl(data.url);
+        setEditImageUrls((prev) => [...prev, ...uploaded]);
       }
     } catch (err: any) {
-      alert("Could not upload image: " + err.message);
+      alert("Could not upload image(s): " + err.message);
     } finally {
-      if (type === "add") setUploadingAddImage(false);
-      else setUploadingEditImage(false);
+      if (type === "add") {
+        setUploadingAddImage(false);
+        if (addFileInputRef.current) addFileInputRef.current.value = "";
+      } else {
+        setUploadingEditImage(false);
+        if (editFileInputRef.current) editFileInputRef.current.value = "";
+      }
+    }
+  };
+
+  // Add custom URL to gallery
+  const handleAddCustomUrl = (type: "add" | "edit") => {
+    const url = (type === "add" ? customAddUrl : customEditUrl).trim();
+    if (!url) return;
+    if (type === "add") {
+      setNewImageUrls((prev) => [...prev, url]);
+      setCustomAddUrl("");
+    } else {
+      setEditImageUrls((prev) => [...prev, url]);
+      setCustomEditUrl("");
+    }
+  };
+
+  // Set one image as the primary product image (moves to index 0)
+  const handleSetPrimary = (index: number, type: "add" | "edit") => {
+    if (index === 0) return;
+    if (type === "add") {
+      setNewImageUrls((prev) => {
+        const item = prev[index];
+        const next = [...prev];
+        next.splice(index, 1);
+        return [item, ...next];
+      });
+    } else {
+      setEditImageUrls((prev) => {
+        const item = prev[index];
+        const next = [...prev];
+        next.splice(index, 1);
+        return [item, ...next];
+      });
+    }
+  };
+
+  // Reorder photos (move left / right)
+  const handleMoveImage = (
+    index: number,
+    direction: "left" | "right",
+    type: "add" | "edit"
+  ) => {
+    const list = type === "add" ? [...newImageUrls] : [...editImageUrls];
+    const targetIdx = direction === "left" ? index - 1 : index + 1;
+    if (targetIdx < 0 || targetIdx >= list.length) return;
+    const temp = list[index];
+    list[index] = list[targetIdx];
+    list[targetIdx] = temp;
+    if (type === "add") setNewImageUrls(list);
+    else setEditImageUrls(list);
+  };
+
+  // Delete individual photo
+  const handleDeleteImage = (index: number, type: "add" | "edit") => {
+    if (type === "add") {
+      setNewImageUrls((prev) => prev.filter((_, i) => i !== index));
+    } else {
+      setEditImageUrls((prev) => prev.filter((_, i) => i !== index));
     }
   };
 
@@ -157,7 +233,7 @@ export default function ProductsPage() {
           price: priceNum,
           stock_quantity: stockNum,
           description: newDesc.trim() || null,
-          image_url: newImageUrl.trim() || null,
+          image_urls: newImageUrls,
         }),
       });
 
@@ -175,7 +251,8 @@ export default function ProductsPage() {
       setNewPrice("");
       setNewStock("");
       setNewDesc("");
-      setNewImageUrl("");
+      setNewImageUrls([]);
+      setCustomAddUrl("");
       setIsAdding(false);
     } catch (err: any) {
       alert("Failed to add product: " + (err.message || "Unknown error"));
@@ -191,7 +268,10 @@ export default function ProductsPage() {
     setEditPrice(product.price.toString());
     setEditStock(product.stock_quantity.toString());
     setEditDesc(product.description || "");
-    setEditImageUrl(product.image_urls?.[0] || "");
+    setEditImageUrls(
+      Array.isArray(product.image_urls) ? [...product.image_urls] : []
+    );
+    setCustomEditUrl("");
     setEditIsAvailable(product.is_available);
   };
 
@@ -215,7 +295,7 @@ export default function ProductsPage() {
           stock_quantity: stockNum,
           description: editDesc.trim() || null,
           is_available: editIsAvailable && stockNum > 0,
-          image_url: editImageUrl.trim() || null,
+          image_urls: editImageUrls,
         }),
       });
 
@@ -442,18 +522,26 @@ export default function ProductsPage() {
           </div>
 
           {/* Product Image Upload Section */}
-          <div className="space-y-2 pt-1">
-            <label className="block text-xs font-semibold text-slate-300">
-              Product Photo / Image (Used for AI Vision Recognition)
-            </label>
+          <div className="space-y-3 pt-1">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+              <label className="block text-xs font-semibold text-slate-300">
+                Product Photos ({newImageUrls.length} uploaded)
+              </label>
+              <span className="text-[11px] text-slate-400">
+                ⭐ 1st photo is primary. Conversa sends all photos to customers.
+              </span>
+            </div>
+
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <input
                 type="file"
                 ref={addFileInputRef}
                 accept="image/*"
+                multiple
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleUploadImageFile(file, "add");
+                  if (e.target.files && e.target.files.length > 0) {
+                    handleUploadImageFiles(e.target.files, "add");
+                  }
                 }}
                 className="hidden"
               />
@@ -461,44 +549,112 @@ export default function ProductsPage() {
                 type="button"
                 disabled={uploadingAddImage}
                 onClick={() => addFileInputRef.current?.click()}
-                className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white hover:border-blue-500 transition disabled:opacity-50"
+                className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white hover:border-blue-500 transition disabled:opacity-50 shrink-0"
               >
                 {uploadingAddImage ? (
                   <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
                 ) : (
                   <Upload className="h-4 w-4 text-blue-400" />
                 )}
-                {uploadingAddImage ? "Uploading..." : "Upload Photo From Device"}
+                {uploadingAddImage ? "Uploading..." : "Upload Photos (Select Multiple)"}
               </button>
 
-              <span className="text-xs text-slate-500">or enter image URL:</span>
-              <input
-                type="url"
-                value={newImageUrl}
-                onChange={(e) => setNewImageUrl(e.target.value)}
-                placeholder="https://..."
-                className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-
-            {newImageUrl && (
-              <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-2 max-w-sm mt-2">
-                <img
-                  src={newImageUrl}
-                  alt="Product preview"
-                  className="h-12 w-12 rounded-lg object-cover border border-slate-700"
+              <div className="flex items-center gap-2 flex-1 w-full sm:w-auto">
+                <input
+                  type="url"
+                  value={customAddUrl}
+                  onChange={(e) => setCustomAddUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCustomUrl("add");
+                    }
+                  }}
+                  placeholder="Paste photo URL..."
+                  className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-none"
                 />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[11px] text-white font-medium truncate">{newImageUrl}</div>
-                  <div className="text-[10px] text-emerald-400">Ready for AI recognition</div>
-                </div>
                 <button
                   type="button"
-                  onClick={() => setNewImageUrl("")}
-                  className="p-1 text-slate-400 hover:text-red-400"
+                  onClick={() => handleAddCustomUrl("add")}
+                  className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-700 transition shrink-0"
                 >
-                  <X className="h-4 w-4" />
+                  Add URL
                 </button>
+              </div>
+            </div>
+
+            {/* Gallery Thumbnail Grid */}
+            {newImageUrls.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-2">
+                {newImageUrls.map((url, idx) => (
+                  <div
+                    key={idx}
+                    className={`group relative rounded-xl border p-1.5 transition ${
+                      idx === 0
+                        ? "border-amber-500/80 bg-amber-500/5 shadow-md shadow-amber-500/10"
+                        : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-slate-950">
+                      <img
+                        src={url}
+                        alt={`Product preview ${idx + 1}`}
+                        className="h-full w-full object-cover"
+                      />
+                      {idx === 0 && (
+                        <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-950 shadow">
+                          <Star className="h-3 w-3 fill-slate-950" />
+                          <span>Primary</span>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteImage(idx, "add")}
+                        title="Delete photo"
+                        className="absolute top-1.5 right-1.5 rounded-full bg-slate-950/80 p-1 text-slate-400 hover:bg-rose-600 hover:text-white transition"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-between text-[11px] px-0.5">
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => handleMoveImage(idx, "left", "add")}
+                          title="Move photo earlier"
+                          className="rounded p-0.5 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === newImageUrls.length - 1}
+                          onClick={() => handleMoveImage(idx, "right", "add")}
+                          title="Move photo later"
+                          className="rounded p-0.5 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400"
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {idx !== 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleSetPrimary(idx, "add")}
+                          className="text-[10px] text-amber-400 hover:text-amber-300 font-medium transition"
+                        >
+                          Make Primary
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-800 p-4 text-center text-xs text-slate-500">
+                No photos selected yet. Click &quot;Upload Photos&quot; to select multiple images from device, or paste image URLs.
               </div>
             )}
           </div>
@@ -615,18 +771,26 @@ export default function ProductsPage() {
           </div>
 
           {/* Product Image Upload Section */}
-          <div className="space-y-2 pt-1">
-            <label className="block text-xs font-semibold text-slate-300">
-              Product Photo / Image (Used for AI Vision Recognition)
-            </label>
+          <div className="space-y-3 pt-1">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+              <label className="block text-xs font-semibold text-slate-300">
+                Product Photos ({editImageUrls.length} uploaded)
+              </label>
+              <span className="text-[11px] text-slate-400">
+                ⭐ 1st photo is primary. Conversa sends all photos to customers.
+              </span>
+            </div>
+
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <input
                 type="file"
                 ref={editFileInputRef}
                 accept="image/*"
+                multiple
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleUploadImageFile(file, "edit");
+                  if (e.target.files && e.target.files.length > 0) {
+                    handleUploadImageFiles(e.target.files, "edit");
+                  }
                 }}
                 className="hidden"
               />
@@ -634,44 +798,112 @@ export default function ProductsPage() {
                 type="button"
                 disabled={uploadingEditImage}
                 onClick={() => editFileInputRef.current?.click()}
-                className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white hover:border-emerald-500 transition disabled:opacity-50"
+                className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white hover:border-emerald-500 transition disabled:opacity-50 shrink-0"
               >
                 {uploadingEditImage ? (
                   <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
                 ) : (
                   <Upload className="h-4 w-4 text-emerald-400" />
                 )}
-                {uploadingEditImage ? "Uploading..." : "Upload / Replace Photo"}
+                {uploadingEditImage ? "Uploading..." : "Add More Photos (Multi-select)"}
               </button>
 
-              <span className="text-xs text-slate-500">or image URL:</span>
-              <input
-                type="url"
-                value={editImageUrl}
-                onChange={(e) => setEditImageUrl(e.target.value)}
-                placeholder="https://..."
-                className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
-              />
-            </div>
-
-            {editImageUrl && (
-              <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-2 max-w-sm mt-2">
-                <img
-                  src={editImageUrl}
-                  alt="Product preview"
-                  className="h-14 w-14 rounded-lg object-cover border border-slate-700"
+              <div className="flex items-center gap-2 flex-1 w-full sm:w-auto">
+                <input
+                  type="url"
+                  value={customEditUrl}
+                  onChange={(e) => setCustomEditUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCustomUrl("edit");
+                    }
+                  }}
+                  placeholder="Paste photo URL..."
+                  className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
                 />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[11px] text-white font-medium truncate">{editImageUrl}</div>
-                  <div className="text-[10px] text-emerald-400">Active image in AI catalog</div>
-                </div>
                 <button
                   type="button"
-                  onClick={() => setEditImageUrl("")}
-                  className="p-1 text-slate-400 hover:text-red-400"
+                  onClick={() => handleAddCustomUrl("edit")}
+                  className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-700 transition shrink-0"
                 >
-                  <X className="h-4 w-4" />
+                  Add URL
                 </button>
+              </div>
+            </div>
+
+            {/* Gallery Thumbnail Grid */}
+            {editImageUrls.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-2">
+                {editImageUrls.map((url, idx) => (
+                  <div
+                    key={idx}
+                    className={`group relative rounded-xl border p-1.5 transition ${
+                      idx === 0
+                        ? "border-amber-500/80 bg-amber-500/5 shadow-md shadow-amber-500/10"
+                        : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-slate-950">
+                      <img
+                        src={url}
+                        alt={`Product photo ${idx + 1}`}
+                        className="h-full w-full object-cover"
+                      />
+                      {idx === 0 && (
+                        <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-950 shadow">
+                          <Star className="h-3 w-3 fill-slate-950" />
+                          <span>Primary</span>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteImage(idx, "edit")}
+                        title="Delete photo"
+                        className="absolute top-1.5 right-1.5 rounded-full bg-slate-950/80 p-1 text-slate-400 hover:bg-rose-600 hover:text-white transition"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-between text-[11px] px-0.5">
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => handleMoveImage(idx, "left", "edit")}
+                          title="Move photo earlier"
+                          className="rounded p-0.5 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === editImageUrls.length - 1}
+                          onClick={() => handleMoveImage(idx, "right", "edit")}
+                          title="Move photo later"
+                          className="rounded p-0.5 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400"
+                        >
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {idx !== 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleSetPrimary(idx, "edit")}
+                          className="text-[10px] text-amber-400 hover:text-amber-300 font-medium transition"
+                        >
+                          Make Primary
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-800 p-4 text-center text-xs text-slate-500">
+                No photos for this product. Upload photos from device or paste image URLs to attach multiple photos.
               </div>
             )}
           </div>
@@ -763,11 +995,21 @@ export default function ProductsPage() {
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         {product.image_urls?.[0] ? (
-                          <img
-                            src={product.image_urls[0]}
-                            alt={product.title}
-                            className="h-10 w-10 rounded-xl object-cover border border-slate-700/80 bg-slate-900 shrink-0"
-                          />
+                          <div className="relative shrink-0">
+                            <img
+                              src={product.image_urls[0]}
+                              alt={product.title}
+                              className="h-10 w-10 rounded-xl object-cover border border-slate-700/80 bg-slate-900"
+                            />
+                            {product.image_urls.length > 1 && (
+                              <span
+                                className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white ring-1 ring-slate-900 shadow"
+                                title={`${product.image_urls.length} photos uploaded`}
+                              >
+                                {product.image_urls.length}
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-800 bg-slate-900 text-slate-500 shrink-0">
                             <ImageIcon className="h-5 w-5" />

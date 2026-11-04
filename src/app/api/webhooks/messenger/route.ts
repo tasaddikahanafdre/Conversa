@@ -2,7 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptToken } from "@/lib/security/encryption";
-import { sendMessengerMessage, sendMessengerAttachment } from "@/lib/meta/client";
+import { sendMessengerMessage, sendMessengerAttachment, sendMessengerMultipleAttachments } from "@/lib/meta/client";
 import { generateAiReply, ChatMessage } from "@/lib/ai/provider";
 import { findRequestedProductImage, sanitizeAiReplyText } from "@/lib/products/image-delivery";
 
@@ -398,20 +398,20 @@ ${agent?.base_system_prompt || ""}
     return;
   }
 
-  // 12. If customer requested product picture and image exists, send as native Messenger image attachment
-  // Setting type="image" ensures Facebook Messenger renders it as an inline photo instead of a downloadable file/document
-  if (imageDelivery.imageUrl) {
+  // 12. If customer requested product picture and images exist, send as native Messenger image attachments
+  // Setting type="image" ensures Facebook Messenger renders them as inline photos instead of downloadable files/documents
+  if (imageDelivery.imageUrls && imageDelivery.imageUrls.length > 0) {
     try {
-      const attachRes = await sendMessengerAttachment(
+      const attachRes = await sendMessengerMultipleAttachments(
         pageAccessToken,
         senderId,
-        imageDelivery.imageUrl,
+        imageDelivery.imageUrls,
         "image"
       );
       if (attachRes.success) {
-        console.log(`[Auto-Reply Image Success] Sent native image attachment for ${imageDelivery.product?.title}`);
+        console.log(`[Auto-Reply Image Success] Sent ${attachRes.sentCount} native image attachments for ${imageDelivery.product?.title}`);
       } else {
-        console.warn(`[Auto-Reply Image Warning] Failed to send attachment:`, attachRes.error);
+        console.warn(`[Auto-Reply Image Warning] Failed to send attachments:`, attachRes.errors);
       }
     } catch (attachErr) {
       console.error("[Auto-Reply Attachment Error]", attachErr);

@@ -27,6 +27,7 @@ interface TestMessage {
   isTrained?: boolean;
   imageBase64?: string | null;
   mediaUrl?: string | null;
+  imageUrls?: string[] | null;
 }
 
 interface ProductItem {
@@ -187,6 +188,8 @@ export default function TestArenaPage() {
             text: botResponse,
             time: "Just now",
             isTrained: data.trained,
+            mediaUrl: data.mediaUrl || null,
+            imageUrls: data.imageUrls || (data.mediaUrl ? [data.mediaUrl] : null),
           },
         ]);
 
@@ -469,13 +472,24 @@ export default function TestArenaPage() {
                           <span>AI Trained & Saved</span>
                         </div>
                       )}
-                      {(m.imageBase64 || m.mediaUrl) && (
+                      {m.imageUrls && m.imageUrls.length > 1 ? (
+                        <div className="grid grid-cols-2 gap-1.5 mb-2">
+                          {m.imageUrls.map((imgUrl, imgIdx) => (
+                            <img
+                              key={imgIdx}
+                              src={imgUrl}
+                              alt={`Product photo ${imgIdx + 1}`}
+                              className="h-28 w-full rounded-lg object-cover border border-white/20 bg-slate-900"
+                            />
+                          ))}
+                        </div>
+                      ) : (m.imageBase64 || m.mediaUrl) ? (
                         <img
                           src={m.imageBase64 || m.mediaUrl || ""}
                           alt="Customer product photo"
                           className="max-h-44 w-full rounded-xl mb-1.5 object-cover border border-white/20"
                         />
-                      )}
+                      ) : null}
                       {m.text}
                       <div
                         className={`text-[9px] mt-1 ${

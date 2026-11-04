@@ -357,3 +357,41 @@ export async function sendMessengerAttachment(
     return { success: false, error: msg };
   }
 }
+
+/**
+ * Sends multiple native attachments (e.g. product photos) sequentially to a customer via Meta Send API.
+ * Sequential sending with a small delay ensures all images are delivered in exact order and display
+ * as a cohesive photo set inside Facebook Messenger.
+ */
+export async function sendMessengerMultipleAttachments(
+  pageAccessToken: string,
+  recipientId: string,
+  attachmentUrls: string[],
+  type: "image" | "file" | "audio" | "video" = "image"
+): Promise<{ success: boolean; sentCount: number; errors: string[] }> {
+  const errors: string[] = [];
+  let sentCount = 0;
+
+  for (let i = 0; i < attachmentUrls.length; i++) {
+    const url = attachmentUrls[i];
+    if (!url || typeof url !== "string") continue;
+
+    const res = await sendMessengerAttachment(pageAccessToken, recipientId, url.trim(), type);
+    if (res.success) {
+      sentCount++;
+    } else if (res.error) {
+      errors.push(res.error);
+    }
+
+    // Small delay between attachments to ensure Messenger receives and orders them cleanly
+    if (i < attachmentUrls.length - 1) {
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  return {
+    success: sentCount > 0,
+    sentCount,
+    errors,
+  };
+}

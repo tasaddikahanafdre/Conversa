@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptToken } from "@/lib/security/encryption";
-import { sendMessengerMessage, sendMessengerAttachment } from "@/lib/meta/client";
+import { sendMessengerMessage, sendMessengerAttachment, sendMessengerMultipleAttachments } from "@/lib/meta/client";
 import { generateAiReply, ChatMessage } from "@/lib/ai/provider";
 import { findRequestedProductImage, sanitizeAiReplyText } from "@/lib/products/image-delivery";
 
@@ -267,13 +267,13 @@ ${agent?.base_system_prompt || ""}
           if (sendRes.success) {
             repliesSent++;
 
-            // If customer requested a product picture, send native Messenger image attachment
-            if (imageDelivery.imageUrl) {
+            // If customer requested product pictures, send native Messenger image attachments
+            if (imageDelivery.imageUrls && imageDelivery.imageUrls.length > 0) {
               try {
-                await sendMessengerAttachment(
+                await sendMessengerMultipleAttachments(
                   pageToken,
                   customerId,
-                  imageDelivery.imageUrl,
+                  imageDelivery.imageUrls,
                   "image"
                 );
               } catch (attachErr) {

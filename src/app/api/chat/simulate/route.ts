@@ -137,6 +137,7 @@ ${agent?.base_system_prompt || ""}
       ...result,
       text: cleanText,
       mediaUrl: imageDelivery.imageUrl || null,
+      imageUrls: imageDelivery.imageUrls || [],
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to simulate AI reply";
