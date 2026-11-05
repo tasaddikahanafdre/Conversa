@@ -16,13 +16,20 @@ export async function GET(request: NextRequest) {
 
     const { data: products, error } = await adminClient
       .from("products")
-      .select("id, title, sku, price, stock_quantity, description, image_urls, is_available, created_at, updated_at")
+      .select("id, title, sku, price, stock_quantity, description, image_urls, is_available, metadata, created_at, updated_at")
       .eq("workspace_id", wsId)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
-    return NextResponse.json({ products: products || [] });
+    const formatted = (products || []).map((p: any) => ({
+      ...p,
+      min_price: typeof p.min_price === "number"
+        ? p.min_price
+        : (typeof p.metadata?.min_price === "number" ? p.metadata.min_price : p.price),
+    }));
+
+    return NextResponse.json({ products: formatted });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "Failed to fetch products" }, { status: 500 });
   }
@@ -46,6 +53,11 @@ export async function POST(request: NextRequest) {
     const stock = parseInt(body.stock_quantity, 10) || 10;
     const description = (body.description || "").trim();
     const sku = (body.sku || `SKU-${Date.now().toString().slice(-5)}`).trim();
+    const rawMin = body.min_price !== undefined && body.min_price !== null && body.min_price !== ""
+      ? parseFloat(body.min_price)
+      : price;
+    const minPrice = !isNaN(rawMin) && rawMin > 0 ? Math.min(rawMin, price) : price;
+
     const imageUrls = Array.isArray(body.image_urls)
       ? body.image_urls
       : body.image_url
@@ -67,13 +79,22 @@ export async function POST(request: NextRequest) {
         sku,
         image_urls: imageUrls,
         is_available: true,
+        metadata: {
+          ...(body.metadata || {}),
+          min_price: minPrice,
+        },
       })
       .select("*")
       .single();
 
     if (error) throw error;
 
-    return NextResponse.json({ success: true, product });
+    const formattedProduct = {
+      ...product,
+      min_price: product.metadata?.min_price ?? product.price,
+    };
+
+    return NextResponse.json({ success: true, product: formattedProduct });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "Failed to create product" }, { status: 500 });
   }
@@ -83,11 +104,18 @@ export async function PUT(request: NextRequest) {
   try {
     const adminClient = createAdminClient();
     const body = await request.json();
-    const { id, title, price, stock_quantity, description, is_available, image_urls, image_url } = body;
+    const { id, title, price, min_price, stock_quantity, description, is_available, image_urls, image_url } = body;
 
     if (!id) {
       return NextResponse.json({ error: "Product ID is required" }, { status: 400 });
     }
+
+    // Fetch existing product to preserve metadata and compute valid min_price
+    const { data: existingProduct } = await adminClient
+      .from("products")
+      .select("price, metadata")
+      .eq("id", id)
+      .maybeSingle();
 
     const updateData: any = {
       updated_at: new Date().toISOString(),
@@ -103,6 +131,21 @@ export async function PUT(request: NextRequest) {
       updateData.image_urls = image_url ? [image_url] : [];
     }
 
+    if (min_price !== undefined || price !== undefined) {
+      const targetBasePrice = price !== undefined ? (parseFloat(price) || 0) : (existingProduct?.price || 0);
+      const targetMinInput = min_price !== undefined
+        ? parseFloat(min_price)
+        : (existingProduct?.metadata?.min_price ?? targetBasePrice);
+      const finalMin = !isNaN(targetMinInput) && targetMinInput > 0
+        ? Math.min(targetMinInput, targetBasePrice)
+        : targetBasePrice;
+
+      updateData.metadata = {
+        ...(existingProduct?.metadata || {}),
+        min_price: finalMin,
+      };
+    }
+
     const { data: updated, error } = await adminClient
       .from("products")
       .update(updateData)
@@ -112,7 +155,12 @@ export async function PUT(request: NextRequest) {
 
     if (error) throw error;
 
-    return NextResponse.json({ success: true, product: updated });
+    const formattedUpdated = {
+      ...updated,
+      min_price: updated.metadata?.min_price ?? updated.price,
+    };
+
+    return NextResponse.json({ success: true, product: formattedUpdated });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "Failed to update product" }, { status: 500 });
   }

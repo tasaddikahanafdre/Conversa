@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateAiReply } from "@/lib/ai/provider";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { findRequestedProductImage, sanitizeAiReplyText } from "@/lib/products/image-delivery";
+import { buildSalesSystemPrompt } from "@/lib/ai/sales-prompt";
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,45 +70,16 @@ export async function POST(request: NextRequest) {
 
     const { data: productsList } = await adminClient
       .from("products")
-      .select("title, price, stock_quantity, description, is_available, image_urls")
+      .select("id, title, price, stock_quantity, description, is_available, image_urls, metadata")
       .eq("workspace_id", wsId);
 
-    const knowledgeSummary = (knowledgeList || [])
-      .map((k) => `[${k.category.toUpperCase()}] ${k.title}: ${k.content}`)
-      .join("\n");
-
-    const productSummary = (productsList || [])
-      .map(
-        (p) =>
-          `- ${p.title}: ৳${p.price} (${p.is_available && p.stock_quantity > 0 ? "In Stock" : "Out of Stock"}). ${p.description || ""}${p.image_urls?.[0] ? " [Has Photo Available]" : ""}`
-      )
-      .join("\n");
-
-    const systemInstruction = `
-You are the versatile, highly intelligent, and friendly AI customer assistant for "Conversa" on Facebook Messenger in Bangladesh.
-
-Capabilities & Universal Response Behavior:
-- You can converse freely and politely about ANYTHING: greetings, casual small talk, general knowledge, store products, prices, delivery, order taking, recommendations, or whatever the customer says.
-- Never refuse to chat or say "I can only answer shop questions". If the customer asks a general question, chit-chats, jokes, or asks for advice, respond warmly, wittily, and helpfully.
-- When customers ask about products, pricing, or orders, use the business details and product catalog below accurately.
-- Visual Image Recognition: When a customer sends a photo or image of an item, inspect the image visually and identify which product from our Available Products catalog it is (e.g. Magical Garage Key Hanger with LED Mini Car Display, XO1 Auto Charge Separator, etc.). Confirm that we sell it, state its exact price in BDT (৳) and stock status, and politely ask if they want to place an order. If it is an item not in our catalog, politely clarify that we do not have that specific item and recommend our popular available products.
-- Product Picture Delivery: When a customer asks for product pictures, samples, or to see a product, describe the product warmly and confirm that you are sending the picture right now. Do NOT output raw image links or URLs in your text message, because our system automatically attaches the high-resolution photo directly into the Messenger conversation. If the customer asks for a picture without specifying which product, politely ask which product they would like to see.
-- Language Rule: You MUST ALWAYS reply in Pure, Natural Bangla script (বাংলা ভাষা - বাংলা হরফে).
-  - Even if the customer writes in Banglish (English letters like "price koto?", "kemon acho?", "delivery koto?") or English or Bangla, you MUST ALWAYS respond in pure, polite, natural standard Bangla (বাংলা বর্ণমালা).
-  - NEVER reply in Banglish (English alphabets writing Bangla words like "Jee, amader...").
-  - Technical terms or product names can remain in clean English or Bangla as natural (e.g. XO1 Auto Charge Separator or ৳699), but all sentences, greetings, and explanations MUST be written in pure Bangla.
-  - Tone: Polite, warm, respectful, and engaging with friendly emojis (${agent?.tone || "Friendly and polite"}).
-- Plain Text Only: Never output markdown formatting like asterisks (**bold**), headers (###), or markdown bullets, as Facebook Messenger displays raw asterisks. Use standard line breaks and emojis.
-- Completeness: Always finish your thoughts and sentences completely. Keep responses concise and engaging (1 to 3 sentences typically, or longer if a detailed explanation is requested).
-
-Store Knowledge & Delivery Policies:
-${knowledgeSummary || "ঢাকার ভিতরে ডেলিভারি চার্জ ৳৭০ (১-২ দিন), ঢাকার বাইরে ৳১৩০ (২-৩ দিন)। ক্যাশ অন ডেলিভারি (COD) সুবিধা রয়েছে।"}
-
-Available Products:
-${productSummary || "XO1 Auto Charge Separator: ৳699 (Original product with auto-disconnect feature)."}
-
-${agent?.base_system_prompt || ""}
-`;
+    const systemInstruction = buildSalesSystemPrompt({
+      storeName: "Conversa",
+      tone: agent?.tone || "Friendly, polite, natural and persuasive",
+      products: productsList || [],
+      knowledgeList: knowledgeList || [],
+      customPersonaPrompt: agent?.base_system_prompt || "",
+    });
 
     const formattedMessages = (messages || []).map((m: any) => ({
       role: m.sender === "user" || m.role === "user" ? "user" : "assistant",

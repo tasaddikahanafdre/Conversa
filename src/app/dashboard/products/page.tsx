@@ -29,6 +29,7 @@ interface Product {
   title: string;
   sku: string | null;
   price: number;
+  min_price?: number;
   stock_quantity: number;
   description: string | null;
   image_urls?: string[] | null;
@@ -50,6 +51,7 @@ export default function ProductsPage() {
   const [newTitle, setNewTitle] = useState("");
   const [newSku, setNewSku] = useState("");
   const [newPrice, setNewPrice] = useState("");
+  const [newMinPrice, setNewMinPrice] = useState("");
   const [newStock, setNewStock] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newImageUrls, setNewImageUrls] = useState<string[]>([]);
@@ -62,6 +64,7 @@ export default function ProductsPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editSku, setEditSku] = useState("");
   const [editPrice, setEditPrice] = useState("");
+  const [editMinPrice, setEditMinPrice] = useState("");
   const [editStock, setEditStock] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [editImageUrls, setEditImageUrls] = useState<string[]>([]);
@@ -221,7 +224,14 @@ export default function ProductsPage() {
     try {
       setSubmitting(true);
       const priceNum = parseFloat(newPrice);
+      const minPriceNum = newMinPrice.trim() ? parseFloat(newMinPrice) : priceNum;
       const stockNum = parseInt(newStock, 10) || 10;
+
+      if (minPriceNum > priceNum) {
+        alert("Minimum negotiation price cannot be higher than the normal selling price.");
+        setSubmitting(false);
+        return;
+      }
 
       const res = await fetch("/api/products", {
         method: "POST",
@@ -231,6 +241,7 @@ export default function ProductsPage() {
           title: newTitle.trim(),
           sku: newSku.trim() || `SKU-${Date.now().toString().slice(-4)}`,
           price: priceNum,
+          min_price: minPriceNum,
           stock_quantity: stockNum,
           description: newDesc.trim() || null,
           image_urls: newImageUrls,
@@ -249,6 +260,7 @@ export default function ProductsPage() {
       setNewTitle("");
       setNewSku("");
       setNewPrice("");
+      setNewMinPrice("");
       setNewStock("");
       setNewDesc("");
       setNewImageUrls([]);
@@ -266,6 +278,11 @@ export default function ProductsPage() {
     setEditTitle(product.title);
     setEditSku(product.sku || "");
     setEditPrice(product.price.toString());
+    setEditMinPrice(
+      typeof product.min_price === "number"
+        ? product.min_price.toString()
+        : product.price.toString()
+    );
     setEditStock(product.stock_quantity.toString());
     setEditDesc(product.description || "");
     setEditImageUrls(
@@ -282,7 +299,14 @@ export default function ProductsPage() {
     try {
       setUpdating(true);
       const priceNum = parseFloat(editPrice);
+      const minPriceNum = editMinPrice.trim() ? parseFloat(editMinPrice) : priceNum;
       const stockNum = parseInt(editStock, 10) || 0;
+
+      if (minPriceNum > priceNum) {
+        alert("Minimum negotiation price cannot be higher than the normal selling price.");
+        setUpdating(false);
+        return;
+      }
 
       const res = await fetch("/api/products", {
         method: "PUT",
@@ -292,6 +316,7 @@ export default function ProductsPage() {
           title: editTitle.trim(),
           sku: editSku.trim(),
           price: priceNum,
+          min_price: minPriceNum,
           stock_quantity: stockNum,
           description: editDesc.trim() || null,
           is_available: editIsAvailable && stockNum > 0,
@@ -481,7 +506,7 @@ export default function ProductsPage() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300">
-                Price (৳ BDT) *
+                Normal Selling Price (৳ BDT) *
               </label>
               <input
                 type="number"
@@ -489,9 +514,25 @@ export default function ProductsPage() {
                 required
                 value={newPrice}
                 onChange={(e) => setNewPrice(e.target.value)}
-                placeholder="699"
+                placeholder="890"
                 className="mt-1 block w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white focus:border-blue-500 focus:outline-none"
               />
+              <p className="mt-1 text-[11px] text-slate-400">Regular price quoted initially.</p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300">
+                Minimum Negotiation Price (৳ BDT)
+              </label>
+              <input
+                type="number"
+                step="any"
+                value={newMinPrice}
+                onChange={(e) => setNewMinPrice(e.target.value)}
+                placeholder={newPrice || "750"}
+                className="mt-1 block w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white focus:border-blue-500 focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-amber-400/90">Confidential floor. AI never goes below this.</p>
             </div>
 
             <div>
@@ -733,7 +774,7 @@ export default function ProductsPage() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300">
-                Price (৳ BDT) *
+                Normal Selling Price (৳ BDT) *
               </label>
               <input
                 type="number"
@@ -743,6 +784,22 @@ export default function ProductsPage() {
                 onChange={(e) => setEditPrice(e.target.value)}
                 className="mt-1 block w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
               />
+              <p className="mt-1 text-[11px] text-slate-400">Regular price quoted initially.</p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300">
+                Minimum Negotiation Price (৳ BDT)
+              </label>
+              <input
+                type="number"
+                step="any"
+                value={editMinPrice}
+                onChange={(e) => setEditMinPrice(e.target.value)}
+                placeholder={editPrice}
+                className="mt-1 block w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-amber-400/90">Confidential floor. AI never goes below this.</p>
             </div>
 
             <div>
@@ -983,7 +1040,7 @@ export default function ProductsPage() {
                 <tr>
                   <th className="px-6 py-3 font-semibold">Product</th>
                   <th className="px-6 py-3 font-semibold">SKU</th>
-                  <th className="px-6 py-3 font-semibold">Price (BDT)</th>
+                  <th className="px-6 py-3 font-semibold">Pricing (BDT)</th>
                   <th className="px-6 py-3 font-semibold">Stock</th>
                   <th className="px-6 py-3 font-semibold">Status</th>
                   <th className="px-6 py-3 text-right font-semibold">Actions</th>
@@ -1026,7 +1083,16 @@ export default function ProductsPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 font-mono text-slate-400">{product.sku || "—"}</td>
-                    <td className="px-6 py-4 font-semibold text-white">{formatBdt(product.price)}</td>
+                    <td className="px-6 py-4">
+                      <div className="font-semibold text-white">{formatBdt(product.price)}</div>
+                      {typeof product.min_price === "number" && product.min_price < product.price ? (
+                        <div className="text-[10px] text-emerald-400 font-medium">
+                          Min: {formatBdt(product.min_price)}
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-slate-500">Fixed price</div>
+                      )}
+                    </td>
                     <td className="px-6 py-4">
                       <span
                         className={`inline-flex items-center gap-1 font-medium ${

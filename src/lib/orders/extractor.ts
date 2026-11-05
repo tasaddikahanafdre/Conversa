@@ -93,7 +93,7 @@ Extract the order details:
 4. "hasCompleteDetails": Boolean. Set to true ONLY IF phone number AND a reasonable delivery address are present.
 5. "matchedProductTitle": The EXACT title of the product from the "Available Store Products" list above that the customer discussed and ordered. If they discussed "Magical Garage Key Hanger", match it to the exact catalog title!
 6. "quantity": Quantity ordered (integer, default 1).
-7. "price": Numeric price of the matched product in BDT.
+7. "price": Numeric price of the matched product in BDT. If a discounted or negotiated price was agreed upon between the customer and assistant in the conversation transcript (e.g. ৳800 instead of ৳890), use that agreed negotiated price!
 8. "isInsideDhaka": Boolean. True if the address or customer stated Inside Dhaka / Dhaka / Dhanmondi / Mirpur / Uttara / Gulshan, etc.
 9. "deliveryFee": 70 if inside Dhaka, 130 if outside Dhaka.
 10. "totalAmount": (price * quantity) + deliveryFee.
