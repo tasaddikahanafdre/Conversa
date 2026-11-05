@@ -102,8 +102,10 @@ export function isPictureRequest(text: string): boolean {
     /দেখান/i,
     /দেখাও/i,
     /দেখি/i,
+    /দেখবো/i,
     /দেখতে চাই/i,
     /পাঠান/i,
+    /পাঠাও/i,
     /আসল ছবি/i,
     /রিয়েল ছবি/i,
     /রিয়েল ছবি/i,
@@ -113,8 +115,13 @@ export function isPictureRequest(text: string): boolean {
     /বাকি ছবি/i,
     // English / Banglish phrases
     /\bchobi\b/i,
+    /\bchobbi\b/i,
     /\bpic\b/i,
     /\bpics\b/i,
+    /\bpick\b/i,
+    /\bpicks\b/i,
+    /\bpik\b/i,
+    /\bpiks\b/i,
     /\bpicture\b/i,
     /\bpictures\b/i,
     /\bphoto\b/i,
@@ -122,20 +129,29 @@ export function isPictureRequest(text: string): boolean {
     /\bimage\b/i,
     /\bimages\b/i,
     /\bsample\b/i,
+    /\bsamples\b/i,
     /\blook like\b/i,
     /\bdekhi\b/i,
+    /\bdekhbo\b/i,
     /\bdekhan\b/i,
     /\bdekhao\b/i,
     /\bpathan\b/i,
+    /\bpathao\b/i,
     /\breal pic\b/i,
+    /\breal pick\b/i,
     /\breal picture\b/i,
     /\baro chobi\b/i,
     /\bsob chobi\b/i,
     /\bsob pic\b/i,
+    /\bsob pick\b/i,
     /\ball pic\b/i,
     /\ball pics\b/i,
+    /\ball pick\b/i,
+    /\ball picks\b/i,
     /\bmore pic\b/i,
     /\bmore pics\b/i,
+    /\bmore pick\b/i,
+    /\bmore picks\b/i,
     /\bmore photos\b/i,
     /\bmore pictures\b/i,
   ];
@@ -250,8 +266,63 @@ export function findRequestedProductImage(params: {
 }): ImageDeliveryResult {
   const { currentMessage, chatHistory = [], products } = params;
 
+  let isDirectPicture = isPictureRequest(currentMessage);
+  let matchedProduct: ProductItem | null = null;
+  let matchedReason = "";
+
+  if (isDirectPicture) {
+    matchedProduct = matchProductFromText(currentMessage, products);
+    if (matchedProduct) {
+      matchedReason = "matched_current_message";
+    }
+  }
+
+  // Conversational Context Recognition:
+  // If not an explicit direct picture request, check if the customer is responding to a bot question
+  if (!isDirectPicture && chatHistory && chatHistory.length > 0) {
+    const lastAssistantMessage = [...chatHistory]
+      .reverse()
+      .find((m) => m.role === "assistant" || m.role === "ai" || m.role === "model");
+
+    if (lastAssistantMessage && lastAssistantMessage.content) {
+      // Scenario A: Bot previously asked which product's picture the customer wants to see
+      const botAskedWhichProductPic = /(কোন পণ্যটির ছবি|কোন প্রোডাক্টের ছবি|কোনটার ছবি|ছবি দেখতে চান দয়া করে|what product.*picture|which product.*picture)/i.test(
+        lastAssistantMessage.content
+      );
+      if (botAskedWhichProductPic) {
+        const productFromAnswer = matchProductFromText(currentMessage, products);
+        if (productFromAnswer) {
+          isDirectPicture = true;
+          matchedProduct = productFromAnswer;
+          matchedReason = "customer_answered_which_product_picture";
+        }
+      }
+
+      // Scenario B: Bot previously offered to send pictures of a product, and customer agreed
+      const botOfferedPic = /(ছবি দেখতে চান|ছবি পাঠাবো|ছবি পাঠাব|ছবি দেখাব|ছবি দেখতে চাচ্ছেন|want to see.*(picture|photo|pic)|like to see.*(picture|photo|pic))/i.test(
+        lastAssistantMessage.content
+      );
+      const isAffirmative = /(^|\b)(ha|haa|ji|jee|yes|yeah|yep|sure|ok|accha|achha|dekhan|dekhao|dao|dawo|den|dean|pathan|pathao|send|show|দাও|দেন|দেখান|দেখাও|পাঠান|পাঠাও|হ্যাঁ|হা|হাঁ|জি|আচ্ছা|দেখান তো)(\b|$)/i.test(
+        currentMessage
+      );
+
+      if (botOfferedPic && isAffirmative) {
+        // Retrieve the product discussed in recent history
+        for (const msg of [...chatHistory].reverse().slice(0, 5)) {
+          const histProduct = matchProductFromText(msg.content, products);
+          if (histProduct) {
+            isDirectPicture = true;
+            matchedProduct = histProduct;
+            matchedReason = "customer_confirmed_bot_picture_offer";
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // 1. Is this a picture request?
-  if (!isPictureRequest(currentMessage)) {
+  if (!isDirectPicture) {
     return {
       isPictureRequest: false,
       product: null,
@@ -261,11 +332,7 @@ export function findRequestedProductImage(params: {
     };
   }
 
-  // 2. Try identifying product directly from current message
-  let matchedProduct = matchProductFromText(currentMessage, products);
-  let matchedReason = matchedProduct ? "matched_current_message" : "";
-
-  // 3. If not specified or ambiguous in current message, inspect recent conversation history
+  // 3. If picture requested but not identified yet, inspect recent conversation history
   if (!matchedProduct && chatHistory && chatHistory.length > 0) {
     // Scan recent messages from newest to oldest (up to last 5 messages)
     const recent = [...chatHistory].reverse().slice(0, 5);
@@ -292,7 +359,7 @@ export function findRequestedProductImage(params: {
   const isGenericEarbuds = (lowerMsg.includes("earbuds") || lowerMsg.includes("ইয়ারবাডস") || lowerMsg.includes("ইয়ারবাডস"))
     && !lowerMsg.includes("cyxg") && !lowerMsg.includes("q10") && !lowerMsg.includes("q102") && !lowerMsg.includes("super bass");
 
-  if (isGenericEarbuds && matchedReason !== "matched_history_user" && matchedReason !== "matched_history_assistant") {
+  if (isGenericEarbuds && matchedReason !== "matched_history_user" && matchedReason !== "matched_history_assistant" && matchedReason !== "customer_confirmed_bot_picture_offer") {
     matchedProduct = null;
   }
 
@@ -336,13 +403,47 @@ export function findRequestedProductImage(params: {
 }
 
 /**
- * Removes raw image URLs from AI text response to ensure Facebook Messenger
- * displays clean text and doesn't generate unwanted external file/download link cards.
+ * Strips JSON code blocks or raw JSON payload objects if AI hallucinated an attachment structure.
+ */
+function stripJsonBlocks(text: string): string {
+  if (!text) return "";
+  // Strip markdown code fences (```json ... ``` or ``` ... ```)
+  let result = text.replace(/```(?:json)?[\s\S]*?```/gi, "");
+
+  // Match JSON objects containing "attachment" or "payload" with balanced brace extraction
+  const match = result.match(/\{[\s\S]*?(?:"attachment"|"payload")[\s\S]*/);
+  if (match && typeof match.index === "number") {
+    const startIdx = match.index;
+    let depth = 0;
+    let endIdx = -1;
+    for (let i = startIdx; i < result.length; i++) {
+      if (result[i] === "{") depth++;
+      else if (result[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          endIdx = i;
+          break;
+        }
+      }
+    }
+    if (endIdx !== -1) {
+      result = result.slice(0, startIdx) + result.slice(endIdx + 1);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Removes raw image URLs and accidental JSON attachment structures from AI text response
+ * to ensure Facebook Messenger displays clean, natural text and doesn't generate unwanted cards.
  */
 export function sanitizeAiReplyText(text: string): string {
   if (!text) return "";
+  // Strip JSON attachment objects
+  let cleaned = stripJsonBlocks(text);
   // Strip raw supabase or http image links from the text body
-  let cleaned = text.replace(
+  cleaned = cleaned.replace(
     /https?:\/\/[^\s]+?\.(jpg|jpeg|png|webp|gif)(\?[^\s]*)?/gi,
     ""
   );

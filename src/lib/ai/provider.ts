@@ -101,7 +101,7 @@ async function callGeminiApi(
               data: m.imageBase64.replace(/^data:image\/[a-zA-Z]+;base64,/, ""),
             },
           });
-        } else if (m.mediaUrl && m.mediaUrl.startsWith("http")) {
+        } else if (m.role === "user" && m.mediaUrl && m.mediaUrl.startsWith("http")) {
           try {
             const imgRes = await fetch(m.mediaUrl);
             if (imgRes.ok) {
