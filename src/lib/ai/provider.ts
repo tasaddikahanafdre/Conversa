@@ -80,18 +80,18 @@ async function callGeminiApi(
   messages: ChatMessage[],
   options: AICompletionOptions
 ): Promise<AICompletionResponse> {
-  const requestedModel = options.model || "gemini-3.5-flash-lite";
+  const requestedModel = options.model || "gemini-3.1-flash-lite";
   const candidateModels = [
     requestedModel,
-    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
     "gemini-3.5-flash",
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   const contents = await Promise.all(
     messages
       .filter((m) => m.role !== "system")
-      .map(async (m) => {
+      .map(async (m, idx, arr) => {
         const parts: any[] = [];
 
         if (m.imageBase64) {
@@ -101,9 +101,18 @@ async function callGeminiApi(
               data: m.imageBase64.replace(/^data:image\/[a-zA-Z]+;base64,/, ""),
             },
           });
-        } else if (m.role === "user" && m.mediaUrl && m.mediaUrl.startsWith("http")) {
+        } else if (
+          m.role === "user" &&
+          m.mediaUrl &&
+          m.mediaUrl.startsWith("http") &&
+          idx >= arr.length - 2 // Only download image for recent turns to prevent redundant CDN fetches
+        ) {
           try {
-            const imgRes = await fetch(m.mediaUrl);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+            const imgRes = await fetch(m.mediaUrl, { signal: controller.signal });
+            clearTimeout(timeoutId);
+
             if (imgRes.ok) {
               const mime = imgRes.headers.get("content-type") || "image/jpeg";
               const arrayBuf = await imgRes.arrayBuffer();

@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
         // Load knowledge base & products
         const { data: agent } = await adminClient
           .from("ai_agents")
-          .select("id, primary_language, tone, base_system_prompt, primary_model")
+          .select("id, name, persona_prompt, business_type, business_overview, language_style, primary_model, is_active")
           .eq("workspace_id", channel.workspace_id)
           .maybeSingle();
 
@@ -185,10 +185,10 @@ export async function POST(request: NextRequest) {
 
         const systemInstruction = buildSalesSystemPrompt({
           storeName: channel.account_name || "Dregital",
-          tone: agent?.tone || "Friendly, polite, natural and persuasive",
+          tone: agent?.language_style || "Friendly, polite, natural and persuasive",
           products: productsList || [],
           knowledgeList: knowledgeList || [],
-          customPersonaPrompt: agent?.base_system_prompt || "",
+          customPersonaPrompt: agent?.persona_prompt || "",
         });
 
         // Fetch recent conversation context for smooth multi-turn chats
@@ -238,7 +238,7 @@ export async function POST(request: NextRequest) {
 
         try {
           const aiResponse = await generateAiReply(chatHistory, {
-            model: agent?.primary_model || "gemini-3.5-flash-lite",
+            model: agent?.primary_model || "gemini-3.1-flash-lite",
             systemInstruction,
             temperature: 0.6,
             maxTokens: 800,

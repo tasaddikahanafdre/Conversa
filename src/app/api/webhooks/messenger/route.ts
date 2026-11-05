@@ -288,37 +288,6 @@ async function processIncomingMessage(params: {
     return;
   }
 
-  // 5.1 Concurrency & Debounce Guard:
-  // When customers send a photo with a caption, or send multiple photos/messages in quick succession,
-  // Meta often delivers them across separate HTTP webhook requests 50ms - 800ms apart.
-  // Wait 1200ms to allow any immediate consecutive message/photo to be saved to DB.
-  await new Promise((res) => setTimeout(res, 1200));
-
-  if (insertedMsg?.created_at) {
-    const { data: newerCustomerMsgs } = await adminClient
-      .from("messages")
-      .select("id, created_at, content, media_url")
-      .eq("conversation_id", conv.id)
-      .eq("sender_type", "customer")
-      .gte("created_at", insertedMsg.created_at)
-      .neq("id", insertedMsg.id)
-      .order("created_at", { ascending: false });
-
-    // Yield if a newer message was inserted (or an identical timestamp with a lexicographically higher ID)
-    const hasNewer = (newerCustomerMsgs || []).some(
-      (m) =>
-        new Date(m.created_at).getTime() > new Date(insertedMsg.created_at).getTime() ||
-        (m.created_at === insertedMsg.created_at && m.id > insertedMsg.id)
-    );
-
-    if (hasNewer) {
-      console.log(
-        `[Auto-Reply Debounce] Newer customer message detected in conversation ${conv.id}. Yielding to newer handler to prevent double reply.`
-      );
-      return;
-    }
-  }
-
   // 6. Load AI Agent settings, Product Catalog, and Conversation History in parallel
   const [
     { data: agent },
@@ -327,7 +296,7 @@ async function processIncomingMessage(params: {
   ] = await Promise.all([
     adminClient
       .from("ai_agents")
-      .select("id, name, primary_language, tone, base_system_prompt, persona_prompt, primary_model")
+      .select("id, name, persona_prompt, business_type, business_overview, language_style, primary_model, is_active")
       .eq("workspace_id", channel.workspace_id)
       .maybeSingle(),
     adminClient
@@ -352,10 +321,10 @@ async function processIncomingMessage(params: {
   // 7. Compile Smart Sales AI prompt with confidential negotiation boundaries
   const systemInstruction = buildSalesSystemPrompt({
     storeName: channel.account_name || "Dregital",
-    tone: agent?.tone || "Friendly, polite, natural and persuasive",
+    tone: agent?.language_style || "Friendly, polite, natural and persuasive",
     products: productsList || [],
     knowledgeList: knowledgeList || [],
-    customPersonaPrompt: agent?.base_system_prompt || agent?.persona_prompt || "",
+    customPersonaPrompt: agent?.persona_prompt || "",
   });
 
   // 8. Build chat history context from loaded recent messages
@@ -424,21 +393,22 @@ async function processIncomingMessage(params: {
   // Sanitize reply text to remove any raw image URLs so Messenger doesn't render file cards
   const cleanReplyText = sanitizeAiReplyText(replyText);
 
-  // 10.1 AI Reply Rate Guard: Prevent double dispatch if an AI reply was sent in the last 4 seconds
-  const { data: recentAiMsg } = await adminClient
+  // 10.1 Double-Reply Guard:
+  // If an AI reply was already recorded for this conversation within the last 6 seconds,
+  // or if the latest message is already an AI reply, suppress duplicate dispatch.
+  const { data: latestMsgInDb } = await adminClient
     .from("messages")
-    .select("id, created_at")
+    .select("id, sender_type, created_at")
     .eq("conversation_id", conv.id)
-    .eq("sender_type", "ai")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (recentAiMsg?.created_at) {
-    const msSinceLastReply = Date.now() - new Date(recentAiMsg.created_at).getTime();
-    if (msSinceLastReply < 4000) {
+  if (latestMsgInDb?.sender_type === "ai") {
+    const msSinceLastReply = Date.now() - new Date(latestMsgInDb.created_at).getTime();
+    if (msSinceLastReply < 6000) {
       console.log(
-        `[Auto-Reply Rate Guard] Suppressing duplicate reply: AI replied ${msSinceLastReply}ms ago (< 4s) to conversation ${conv.id}.`
+        `[Auto-Reply Guard] Suppressing duplicate reply: AI replied ${msSinceLastReply}ms ago (< 6s) to conversation ${conv.id}.`
       );
       return;
     }
