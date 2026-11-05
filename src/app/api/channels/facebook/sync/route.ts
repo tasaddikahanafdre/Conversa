@@ -117,6 +117,24 @@ export async function POST(request: NextRequest) {
 
         if (!conv || conv.ai_status === "paused" || conv.ai_status === "disabled") continue;
 
+        // Check if an AI message was already sent recently in this conversation to avoid any race condition with webhooks
+        const { data: recentAiMsg } = await adminClient
+          .from("messages")
+          .select("created_at")
+          .eq("conversation_id", conv.id)
+          .eq("sender_type", "ai")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (recentAiMsg?.created_at) {
+          const msSince = Date.now() - new Date(recentAiMsg.created_at).getTime();
+          if (msSince < 15000) {
+            console.log(`[Sync] Thread ${thread.id} skipped: AI replied ${msSince}ms ago`);
+            continue;
+          }
+        }
+
         // Record incoming message
         await adminClient.from("messages").insert({
           conversation_id: conv.id,

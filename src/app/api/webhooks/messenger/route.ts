@@ -66,6 +66,18 @@ export async function POST(request: NextRequest) {
       // Schedule background processing via Next.js 15 after()
       // This returns HTTP 200 OK to Meta in < 25ms, avoiding any webhook timeout or retry throttling
       after(async () => {
+        // Group events by sender (pageId:senderId) across entries to prevent duplicate replies
+        // when Meta bundles text + photo or multiple rapid events within the same webhook payload
+        interface SenderBatch {
+          pageId: string;
+          senderId: string;
+          texts: string[];
+          mediaUrls: string[];
+          messageIds: string[];
+        }
+
+        const senderBatches = new Map<string, SenderBatch>();
+
         for (const entry of payload.entry || []) {
           const pageId = entry.id;
           const messaging = entry.messaging || [];
@@ -75,30 +87,55 @@ export async function POST(request: NextRequest) {
             if (event.message?.is_echo) continue;
 
             const senderId = event.sender?.id;
+            if (!senderId) continue;
+
             const text = event.message?.text?.trim() || "";
             const messageId = event.message?.mid;
             const attachments = event.message?.attachments || [];
             const imageAttachment = attachments.find((a: any) => a.type === "image");
             const mediaUrl = imageAttachment?.payload?.url || null;
 
-            if (senderId && (text || mediaUrl)) {
-              console.log(
-                `[Meta Webhook] Background processing for ${senderId}: "${text}" (Media: ${mediaUrl ? "Yes" : "No"})`
-              );
+            if (!text && !mediaUrl) continue;
 
-              try {
-                await processIncomingMessage({
-                  pageId,
-                  senderId,
-                  messageText: text,
-                  messageId,
-                  mediaUrl,
-                  allMessageIds: messageId ? [messageId] : [],
-                });
-              } catch (err) {
-                console.error("[Auto-Reply Pipeline Error]", err);
-              }
+            const batchKey = `${pageId}:${senderId}`;
+            let batch = senderBatches.get(batchKey);
+            if (!batch) {
+              batch = {
+                pageId,
+                senderId,
+                texts: [],
+                mediaUrls: [],
+                messageIds: [],
+              };
+              senderBatches.set(batchKey, batch);
             }
+
+            if (text) batch.texts.push(text);
+            if (mediaUrl) batch.mediaUrls.push(mediaUrl);
+            if (messageId) batch.messageIds.push(messageId);
+          }
+        }
+
+        for (const batch of senderBatches.values()) {
+          const combinedText = batch.texts.join(" ").trim();
+          const primaryMediaUrl = batch.mediaUrls[0] || null;
+          const primaryMid = batch.messageIds[0];
+
+          console.log(
+            `[Meta Webhook] Background processing for ${batch.senderId}: "${combinedText}" (Media: ${primaryMediaUrl ? "Yes" : "No"}, Events: ${batch.messageIds.length})`
+          );
+
+          try {
+            await processIncomingMessage({
+              pageId: batch.pageId,
+              senderId: batch.senderId,
+              messageText: combinedText,
+              messageId: primaryMid,
+              mediaUrl: primaryMediaUrl,
+              allMessageIds: batch.messageIds,
+            });
+          } catch (err) {
+            console.error("[Auto-Reply Pipeline Error]", err);
           }
         }
       });
@@ -216,13 +253,21 @@ async function processIncomingMessage(params: {
   const customerContent = messageText.trim() || "[Photo]";
 
   // Save incoming customer message to database
-  await adminClient.from("messages").insert({
-    conversation_id: conv.id,
-    sender_type: "customer",
-    content: customerContent,
-    media_url: mediaUrl || null,
-    external_msg_id: messageId || (idsToCheck[0] ?? null),
-  });
+  const { data: insertedMsg, error: insertMsgError } = await adminClient
+    .from("messages")
+    .insert({
+      conversation_id: conv.id,
+      sender_type: "customer",
+      content: customerContent,
+      media_url: mediaUrl || null,
+      external_msg_id: messageId || (idsToCheck[0] ?? null),
+    })
+    .select("id, created_at")
+    .single();
+
+  if (insertMsgError) {
+    console.error("[Auto-Reply] Failed to record customer message:", insertMsgError);
+  }
 
   // Try extracting confirmed order if customer provided name, phone & address
   try {
@@ -241,6 +286,37 @@ async function processIncomingMessage(params: {
   if (conv.ai_status === "paused" || conv.ai_status === "disabled") {
     console.log(`[Auto-Reply] Conversation ${conv.id} is paused for human agent.`);
     return;
+  }
+
+  // 5.1 Concurrency & Debounce Guard:
+  // When customers send a photo with a caption, or send multiple photos/messages in quick succession,
+  // Meta often delivers them across separate HTTP webhook requests 50ms - 800ms apart.
+  // Wait 1200ms to allow any immediate consecutive message/photo to be saved to DB.
+  await new Promise((res) => setTimeout(res, 1200));
+
+  if (insertedMsg?.created_at) {
+    const { data: newerCustomerMsgs } = await adminClient
+      .from("messages")
+      .select("id, created_at, content, media_url")
+      .eq("conversation_id", conv.id)
+      .eq("sender_type", "customer")
+      .gte("created_at", insertedMsg.created_at)
+      .neq("id", insertedMsg.id)
+      .order("created_at", { ascending: false });
+
+    // Yield if a newer message was inserted (or an identical timestamp with a lexicographically higher ID)
+    const hasNewer = (newerCustomerMsgs || []).some(
+      (m) =>
+        new Date(m.created_at).getTime() > new Date(insertedMsg.created_at).getTime() ||
+        (m.created_at === insertedMsg.created_at && m.id > insertedMsg.id)
+    );
+
+    if (hasNewer) {
+      console.log(
+        `[Auto-Reply Debounce] Newer customer message detected in conversation ${conv.id}. Yielding to newer handler to prevent double reply.`
+      );
+      return;
+    }
   }
 
   // 6. Load AI Agent settings, Product Catalog, and Conversation History in parallel
@@ -347,6 +423,26 @@ async function processIncomingMessage(params: {
 
   // Sanitize reply text to remove any raw image URLs so Messenger doesn't render file cards
   const cleanReplyText = sanitizeAiReplyText(replyText);
+
+  // 10.1 AI Reply Rate Guard: Prevent double dispatch if an AI reply was sent in the last 4 seconds
+  const { data: recentAiMsg } = await adminClient
+    .from("messages")
+    .select("id, created_at")
+    .eq("conversation_id", conv.id)
+    .eq("sender_type", "ai")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (recentAiMsg?.created_at) {
+    const msSinceLastReply = Date.now() - new Date(recentAiMsg.created_at).getTime();
+    if (msSinceLastReply < 4000) {
+      console.log(
+        `[Auto-Reply Rate Guard] Suppressing duplicate reply: AI replied ${msSinceLastReply}ms ago (< 4s) to conversation ${conv.id}.`
+      );
+      return;
+    }
+  }
 
   // 11. Send text reply back to customer on Facebook Messenger with retry
   let sendResult = await sendMessengerMessage(
