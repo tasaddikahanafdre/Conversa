@@ -138,6 +138,17 @@ async function callGeminiApi(
       })
   );
 
+  // Merge consecutive same-role turns so parts (e.g. photo attachment + subsequent question) are combined into a single prompt turn
+  const mergedContents: Array<{ role: "user" | "model"; parts: any[] }> = [];
+  for (const c of contents) {
+    const role = c.role as "user" | "model";
+    if (mergedContents.length > 0 && mergedContents[mergedContents.length - 1].role === role) {
+      mergedContents[mergedContents.length - 1].parts.push(...c.parts);
+    } else {
+      mergedContents.push({ role, parts: [...c.parts] });
+    }
+  }
+
   let lastError: Error | null = null;
 
   for (const model of candidateModels) {
@@ -153,7 +164,7 @@ async function callGeminiApi(
       }
 
       const body: Record<string, any> = {
-        contents,
+        contents: mergedContents,
         generationConfig: genConfig,
       };
 

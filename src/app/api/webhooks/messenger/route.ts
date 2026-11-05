@@ -288,6 +288,24 @@ async function processIncomingMessage(params: {
     return;
   }
 
+  // 5.1 If incoming event is ONLY an image attachment without a text question:
+  // Store the photo in conversation context so AI understands what product was sent,
+  // but do NOT send an auto-reply until the customer asks a question about it.
+  const isImageOnly = !messageText.trim() && !!mediaUrl;
+  if (isImageOnly) {
+    console.log(
+      `[Auto-Reply Context] Photo received without text from ${senderId}. Stored in conversation thread for subsequent inquiries.`
+    );
+    await adminClient
+      .from("conversations")
+      .update({
+        last_message_preview: "[Photo]",
+        last_message_at: new Date().toISOString(),
+      })
+      .eq("id", conv.id);
+    return;
+  }
+
   // 6. Load AI Agent settings, Product Catalog, and Conversation History in parallel
   const [
     { data: agent },
@@ -333,7 +351,7 @@ async function processIncomingMessage(params: {
     .map((m) => {
       let content = m.content;
       if (m.sender_type === "customer" && (!content || content === "[Photo]")) {
-        content = "The customer sent a product photo or image. Please inspect it visually and identify the product from our catalog, quote its price in BDT (৳), and ask if they wish to place an order.";
+        content = "[Product photo sent by customer. Visually identify this product from our catalog to answer the customer's inquiries.]";
       }
       return {
         role: m.sender_type === "customer" ? "user" : "assistant",
@@ -347,7 +365,7 @@ async function processIncomingMessage(params: {
       role: "user",
       content:
         messageText.trim() ||
-        "The customer sent a product photo or image. Please inspect it visually and identify the product from our catalog, quote its price in BDT (৳), and ask if they wish to place an order.",
+        "[Product photo sent by customer. Visually identify this product from our catalog to answer the customer's inquiries.]",
       mediaUrl,
     });
   }
